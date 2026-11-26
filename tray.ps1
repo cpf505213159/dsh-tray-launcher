@@ -346,6 +346,19 @@ function Update-BrandIcon {
     return $true
 }
 
+# 右下角轻提示。Win11 下未注册通知应用的气泡（ShowBalloonTip）不会显示，
+# 这里用自绘小窗保证操作反馈可见；极端情况下再退回系统气泡。
+function Show-Toast($text, [int]$ms = 2000) {
+    if ('TrayToast' -as [type]) {
+        try { [TrayToast]::Popup($text, (Test-SystemUsesLightTheme), $ms); return } catch {}
+    }
+    try {
+        $tray.BalloonTipTitle = 'DeepSeek Harness'
+        $tray.BalloonTipText = $text
+        $tray.ShowBalloonTip($ms)
+    } catch {}
+}
+
 # 启动时先落一次图标
 [void](Update-BrandIcon)
 
@@ -430,10 +443,7 @@ $script:miAutostart.CheckOnClick = $false
 $script:miAutostart.add_Click({
     $shortcutPath = Ensure-DesktopShortcut
     if (-not $shortcutPath) {
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '未找到桌面快捷方式，无法设置开机自启'
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Warning
-        $tray.ShowBalloonTip(2500)
+        Show-Toast '未找到桌面快捷方式，无法设置开机自启'
         return
     }
     $name = [System.IO.Path]::GetFileName($shortcutPath)
@@ -442,19 +452,15 @@ $script:miAutostart.add_Click({
         Remove-Item $startupPath -Force
         $script:miAutostart.Checked = $false
         Update-AutostartText
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '已关闭开机自启'
         Write-TrayLog 'autostart disabled'
+        Show-Toast '已关闭开机自启'
     } else {
         Copy-Item $shortcutPath $startupPath -Force
         $script:miAutostart.Checked = $true
         Update-AutostartText
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '已开启开机自启'
         Write-TrayLog 'autostart enabled'
+        Show-Toast '已开启开机自启'
     }
-    $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-    $tray.ShowBalloonTip(2500)
 })
 # 初始勾选状态：启动文件夹里存在对应快捷方式
 $shortcutForCheck = Get-ShortcutPath
@@ -469,10 +475,7 @@ $miRestart = Add-TrayMenuItem $menu '重启 Harness'
 $miRestart.add_Click({
     Write-TrayLog 'restart requested'
     if (-not $script:spawned) {
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '当前是外部 Harness（非本托盘启动），请在其控制台手动重启'
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Warning
-        $tray.ShowBalloonTip(3000)
+        Show-Toast '当前是外部 Harness（非本托盘启动），请在其控制台手动重启'
         return
     }
     $port = Get-HarnessPort
@@ -484,16 +487,10 @@ $miRestart.add_Click({
         Start-HarnessProcess
         # 重启后 token 会更新，旧标签失效：复位 opened，端口就绪后用新 token 打开新页面
         $script:opened = $false
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '正在重启…'
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-        $tray.ShowBalloonTip(2000)
+        Show-Toast '正在重启…'
     } catch {
         Write-TrayLog ('restart failed: ' + $_.Exception.Message)
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '重启失败，详见日志'
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Error
-        $tray.ShowBalloonTip(3000)
+        Show-Toast '重启失败，详见日志'
     }
 })
 $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
@@ -503,10 +500,7 @@ Update-MenuTheme $true
 
 function Open-HarnessUI {
     if ($script:externalNoToken -and -not $script:harnessUrl) {
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '无法自动获取访问令牌，请在 Harness 原窗口打开它打印的带 ?token= 的地址。'
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Warning
-        $tray.ShowBalloonTip(5000)
+        Show-Toast '无法自动获取访问令牌，请在 Harness 原窗口打开它打印的带 ?token= 的地址。'
         return
     }
     Start-Process (Get-HarnessUrl)
@@ -611,19 +605,13 @@ if ($already) {
     if ($attachUrl) {
         $script:harnessUrl = $attachUrl
         Write-TrayLog ('harness already listening on port ' + (Get-HarnessPort) + '; tray attached')
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '已在运行'
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-        $tray.ShowBalloonTip(2500)
+        Show-Toast '已在运行'
     } else {
         # 外部已有 harness 在监听，但拿不到它进程内存里的 ?token=，裸地址会 401。
         # 标记 externalNoToken：不自动开浏览器，提示用户用原窗口打印的带 token 地址。
         $script:externalNoToken = $true
         Write-TrayLog ('port ' + (Get-HarnessPort) + ' already in use but no token URL in log (external harness?); attached without owning it')
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '检测到 Harness 已在运行，但无法自动获取访问令牌。请在其原窗口打开 dsh 打印的带 ?token= 的地址（或右击托盘「重启 Harness」由本托盘接管）。'
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Warning
-        $tray.ShowBalloonTip(6000)
+        Show-Toast '检测到 Harness 已在运行，但无法自动获取访问令牌。请在其原窗口打开 dsh 打印的带 ?token= 的地址（或右击托盘「重启 Harness」由本托盘接管）。' 6000
     }
 } else {
     if (-not $bin) {
@@ -636,16 +624,10 @@ if ($already) {
     }
     try {
         Start-HarnessProcess
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '正在启动…'
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-        $tray.ShowBalloonTip(2000)
+        Show-Toast '正在启动…'
     } catch {
         Write-TrayLog ('start failed: ' + $_.Exception.Message)
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '启动失败，详见日志'
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Error
-        $tray.ShowBalloonTip(3000)
+        Show-Toast '启动失败，详见日志'
     }
 }
 
@@ -685,10 +667,7 @@ $timer.add_Tick({
 
     if ($script:spawned -and $script:proc -and $script:proc.HasExited) {
         Write-TrayLog 'harness exited'
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '已停止'
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Warning
-        $tray.ShowBalloonTip(2500)
+        Show-Toast '已停止'
         Start-Sleep -Seconds 2
         $tray.Visible = $false
         [System.Windows.Forms.Application]::Exit()

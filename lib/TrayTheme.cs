@@ -127,6 +127,79 @@ public class TrayMenuRenderer : ToolStripRenderer
     }
 }
 
+/// <summary>托盘操作反馈用的轻提示窗：不依赖系统通知（Win11 下未注册的进程气泡常不显示）。</summary>
+public class TrayToast : Form
+{
+    private System.Windows.Forms.Timer closeTimer;
+
+    protected override bool ShowWithoutActivation { get { return true; } }
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            CreateParams cp = base.CreateParams;
+            cp.ExStyle |= 0x08000000; // WS_EX_NOACTIVATE：显示时抢焦点会让菜单立刻关闭
+            return cp;
+        }
+    }
+
+    private TrayToast(string text, bool light)
+    {
+        FormBorderStyle = FormBorderStyle.None;
+        StartPosition = FormStartPosition.Manual;
+        ShowInTaskbar = false;
+        TopMost = true;
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        Padding = new Padding(20, 12, 20, 12);
+        BackColor = light ? Color.FromArgb(250, 250, 250) : Color.FromArgb(34, 34, 34);
+
+        Label label = new Label();
+        label.AutoSize = true;
+        label.Text = text;
+        label.Font = new Font("Microsoft YaHei UI", 9f);
+        label.ForeColor = light ? Color.FromArgb(32, 32, 32) : Color.FromArgb(240, 240, 240);
+        label.BackColor = Color.Transparent;
+        Controls.Add(label);
+    }
+
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        using (GraphicsPath path = new GraphicsPath())
+        {
+            int r = 8;
+            path.AddArc(0, 0, r * 2, r * 2, 180, 90);
+            path.AddArc(Width - r * 2 - 1, 0, r * 2, r * 2, 270, 90);
+            path.AddArc(Width - r * 2 - 1, Height - r * 2 - 1, r * 2, r * 2, 0, 90);
+            path.AddArc(0, Height - r * 2 - 1, r * 2, r * 2, 90, 90);
+            path.CloseFigure();
+            Region = new Region(path);
+        }
+        Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+        Location = new Point(wa.Right - Width - 14, wa.Bottom - Height - 14);
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        if (closeTimer != null) { closeTimer.Dispose(); closeTimer = null; }
+        base.OnFormClosed(e);
+    }
+
+    /// <summary>在屏幕右下角显示一条提示，ms 毫秒后自动关闭。</summary>
+    public static void Popup(string text, bool light, int ms)
+    {
+        TrayToast t = new TrayToast(text, light);
+        t.Show();
+        System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
+        timer.Interval = Math.Max(200, ms);
+        timer.Tick += delegate { timer.Stop(); t.Close(); };
+        t.closeTimer = timer;
+        timer.Start();
+    }
+}
+
 /// <summary>读取多尺寸 ICO，按目标色重着色并以 PNG-compressed ICO 输出。</summary>
 public static class TrayIconFactory
 {
