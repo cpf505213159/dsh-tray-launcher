@@ -3,7 +3,6 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 # 参数:
 #   -DshPath <path>    手动指定 dsh CLI 入口（@deepseek-ai/dsh/lib/bin.js）
-#   -Icon <path.ico>   自定义托盘图标（可选；默认「自动适配 Windows 深浅主题」）
 #   -ShortcutName <名> 桌面快捷方式名称（默认 DeepSeek Harness）
 #   -Autostart         同时注册开机自启
 #   -Yes               跳过安装前确认提示（自动化场景）
@@ -11,7 +10,6 @@
 #   -Cwd <dir>         harness 的工作目录（默认 %USERPROFILE%）
 param(
     [string]$DshPath = "",
-    [string]$Icon = "",
     [string]$ShortcutName = "DeepSeek Harness",
     [string]$Cwd = "",
     [switch]$Autostart,
@@ -154,7 +152,7 @@ if (Test-Path $launcherSource) {
     Invoke-WebRequest -Uri $launcherUrl -OutFile $launcherDest -UseBasicParsing
 }
 
-# 托盘图标：形状源只保留 DeepSeek 鲸鱼，颜色由 tray.ps1 按系统主题在运行时生成
+# 托盘图标：形状源只保留 DeepSeek 鲸鱼，颜色在 tray.ps1 中固定为品牌蓝
 $iconDir = Join-Path $InstallDir 'icons'
 New-Item -ItemType Directory -Path $iconDir -Force | Out-Null
 $iconSrc = Join-Path $PSScriptRoot 'icons\deepseek.ico'
@@ -177,16 +175,8 @@ if (Test-Path $themeCsSrc) {
     Invoke-WebRequest -Uri $csUrl -OutFile $themeCsDest -UseBasicParsing
 }
 
-# 图标模式：默认 brand（DeepSeek 官方蓝鲸鱼）；-Icon 传入时复制到安装目录并写绝对路径
-$iconSetting = 'brand'
-if ($Icon -and (Test-Path $Icon)) {
-    $iconCopy = Join-Path $InstallDir 'custom.ico'
-    Copy-Item $Icon $iconCopy -Force
-    $iconSetting = $iconCopy
-}
-
-# 清理旧版遗留的预设图标与主题图标（新版本只用 icons\deepseek.ico 作为形状源）
-foreach ($legacy in @('icons\liangzu.ico', 'icons\whale-girl.ico', 'icon.ico', 'auto-light.ico', 'auto-dark.ico')) {
+# 清理旧版遗留的图标文件（新版本只用 icons\deepseek.ico 作为形状源）
+foreach ($legacy in @('icons\liangzu.ico', 'icons\whale-girl.ico', 'icon.ico', 'custom.ico', 'auto-light.ico', 'auto-dark.ico')) {
     $legacyPath = Join-Path $InstallDir $legacy
     if (Test-Path $legacyPath -PathType Leaf) { Remove-Item $legacyPath -Force -ErrorAction SilentlyContinue }
 }
@@ -199,20 +189,16 @@ $lnk = $ws.CreateShortcut($lnkPath)
 $lnk.TargetPath = (Join-Path $env:SystemRoot 'System32\wscript.exe')
 $lnk.Arguments = '"' + $launcherDest + '"'
 $lnk.WorkingDirectory = $InstallDir
-# 快捷方式图标：默认生成 DeepSeek 官方品牌蓝鲸鱼
+# 快捷方式图标：生成 DeepSeek 官方品牌蓝鲸鱼
 $shortcutIcon = $null
-if ($iconSetting -eq 'brand') {
-    try {
-        Add-Type -AssemblyName System.Drawing
-        Add-Type -Path $themeCsDest -ReferencedAssemblies @('System.Drawing.dll', 'System.Windows.Forms.dll')
-        $brandIco = Join-Path $InstallDir 'brand.ico'
-        if ([TrayIconFactory]::Build((Join-Path $iconDir 'deepseek.ico'), '#4D6BFE', $brandIco)) {
-            $shortcutIcon = $brandIco
-        }
-    } catch {}
-} else {
-    $shortcutIcon = $iconSetting
-}
+try {
+    Add-Type -AssemblyName System.Drawing
+    Add-Type -Path $themeCsDest -ReferencedAssemblies @('System.Drawing.dll', 'System.Windows.Forms.dll')
+    $brandIco = Join-Path $InstallDir 'brand.ico'
+    if ([TrayIconFactory]::Build((Join-Path $iconDir 'deepseek.ico'), '#4D6BFE', $brandIco)) {
+        $shortcutIcon = $brandIco
+    }
+} catch {}
 if (-not $shortcutIcon) { $shortcutIcon = Join-Path $iconDir 'deepseek.ico' }
 $lnk.IconLocation = $shortcutIcon + ',0'
 $lnk.Description = 'DeepSeek Harness 系统托盘启动器'
@@ -226,7 +212,6 @@ $cfg = @{
     node          = $nodePath
     url           = 'http://127.0.0.1:3080'
     cwd           = $cwdSetting
-    icon          = $iconSetting
     shortcut      = $lnkPath
 }
 $cfg | ConvertTo-Json | Set-Content -Path (Join-Path $InstallDir 'dsh-tray.config.json') -Encoding UTF8

@@ -39,12 +39,6 @@ public static class TrayTheme
             return false;
         }
     }
-
-    /// <summary>当前主题下鲸鱼图标应使用的颜色：浅色主题黑鲸鱼，深色主题白鲸鱼。</summary>
-    public static string IconColor(bool light)
-    {
-        return light ? "#000000" : "#FFFFFF";
-    }
 }
 
 /// <summary>右键菜单绘制：深/浅两套配色，悬停用品牌蓝填充圆角块。</summary>

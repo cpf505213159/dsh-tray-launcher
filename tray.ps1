@@ -282,22 +282,15 @@ if (Test-Path $themeCs) {
     catch { Write-TrayLog ('TrayTheme load failed: ' + $_.Exception.Message) }
 }
 
-# 图标模式：'brand' = DeepSeek 官方蓝鲸鱼（固定颜色）；其余为自定义 .ico 的绝对路径。
-# 旧配置里的预设名、'auto' 与安装目录内置 icon.ico 一律迁移为 brand。
-$script:iconMode = 'brand'
+# 托盘图标固定为 DeepSeek 官方品牌蓝鲸鱼，不支持自定义
 $script:brandIconPath = $null
-$cfgIcon = Get-CfgValue 'icon' ''
-if ($cfgIcon -and $cfgIcon -ne 'brand' -and (Test-Path $cfgIcon)) {
-    $isLegacyBuiltin = ((Split-Path $cfgIcon -Leaf) -eq 'icon.ico' -and (Split-Path $cfgIcon -Parent) -eq $script:dataDir)
-    if (-not $isLegacyBuiltin) { $script:iconMode = $cfgIcon }
-}
 
 $tray = New-Object System.Windows.Forms.NotifyIcon
 $tray.Icon = [System.Drawing.SystemIcons]::Application
 $tray.Text = 'DeepSeek Harness'
 $tray.Visible = $true
 
-# ---- 图标切换：更新托盘 + 配置 + 桌面/自启快捷方式 ----
+# ---- 图标：更新托盘 + 桌面/自启快捷方式 ----
 function Update-ShortcutIcon($icoPath) {
     if (-not $icoPath -or -not (Test-Path $icoPath)) { return }
     try {
@@ -321,61 +314,6 @@ function Update-ShortcutIcon($icoPath) {
     } catch {
         Write-TrayLog ('shortcut icon update failed: ' + $_.Exception.Message)
     }
-}
-
-function Save-CfgValue($name, $value) {
-    $cfg = $null
-    try { $cfg = Get-Content $configPath -Raw | ConvertFrom-Json } catch {}
-    if (-not $cfg) { $cfg = [pscustomobject]@{} }
-    $cfg | Add-Member -MemberType NoteProperty -Name $name -Value $value -Force
-    $cfg | ConvertTo-Json | Set-Content -Path $configPath -Encoding UTF8
-    $script:cfg = $cfg
-}
-
-function Save-IconConfig($value) {
-    Save-CfgValue 'icon' $value
-}
-
-# 轻量气泡反馈，让菜单操作可见
-function Show-TrayTip($text) {
-    try {
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = $text
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-        $tray.ShowBalloonTip(1500)
-    } catch {}
-}
-
-# 切换为自定义图标：复制到数据目录后持久化
-function Set-CustomIcon($sourcePath) {
-    if (-not $sourcePath -or -not (Test-Path $sourcePath)) {
-        Write-TrayLog ('icon missing: ' + $sourcePath)
-        return $false
-    }
-    $dest = Join-Path $script:dataDir 'custom.ico'
-    try {
-        if ((Resolve-Path $sourcePath).Path -ne $dest) { Copy-Item $sourcePath $dest -Force }
-        $tray.Icon = New-Object System.Drawing.Icon($dest)
-    } catch {
-        Write-TrayLog ('icon load failed: ' + $_.Exception.Message)
-        return $false
-    }
-    $script:iconMode = $dest
-    Save-IconConfig $dest
-    Update-ShortcutIcon $dest
-    Update-IconMenuChecks
-    Show-TrayTip '已切换为自定义图标'
-    Write-TrayLog ('custom icon applied: ' + $dest)
-    return $true
-}
-
-function Set-BrandIconMode {
-    $script:iconMode = 'brand'
-    Save-IconConfig 'brand'
-    [void](Update-BrandIcon)
-    Update-IconMenuChecks
-    Show-TrayTip '已切换为 DeepSeek 蓝鲸鱼'
-    Write-TrayLog 'icon mode: brand'
 }
 
 # ---- DeepSeek 官方品牌蓝鲸鱼（固定颜色，不随主题变化）----
@@ -409,12 +347,7 @@ function Update-BrandIcon {
 }
 
 # 启动时先落一次图标
-if ($script:iconMode -eq 'brand') {
-    [void](Update-BrandIcon)
-} else {
-    try { $tray.Icon = New-Object System.Drawing.Icon($script:iconMode) }
-    catch { Write-TrayLog ('icon load failed: ' + $script:iconMode) }
-}
+[void](Update-BrandIcon)
 
 # ---- 右键菜单 ----
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
@@ -424,10 +357,9 @@ $menu.DropShadowEnabled = $true
 $menu.Padding = New-Object System.Windows.Forms.Padding(0, 4, 0, 4)
 $script:menuLight = $null
 
-function Add-TrayMenuItem($target, $text, $onClick) {
+function Add-TrayMenuItem($target, $text) {
     $item = New-Object System.Windows.Forms.ToolStripMenuItem($text)
     $item.Padding = New-Object System.Windows.Forms.Padding(4, 3, 14, 3)
-    if ($onClick) { $item.add_Click($onClick) }
     $target.Items.Add($item) | Out-Null
     return $item
 }
@@ -454,45 +386,8 @@ function Update-AutostartText {
     }
 }
 
-function Update-IconMenuChecks {
-    if ($script:miBrandIcon) {
-        $isBrand = ($script:iconMode -eq 'brand')
-        $script:miBrandIcon.Checked = $isBrand
-        $script:miBrandIcon.Text = if ($isBrand) { 'DeepSeek 蓝鲸鱼 ✓' } else { 'DeepSeek 蓝鲸鱼' }
-    }
-    if ($script:miCustomIcon) {
-        $isCustom = ($script:iconMode -ne 'brand')
-        $script:miCustomIcon.Checked = $isCustom
-        $script:miCustomIcon.Text = if ($isCustom) { '选择自定义图标… ✓' } else { '选择自定义图标…' }
-    }
-}
-
-$miOpen = Add-TrayMenuItem $menu '打开界面' $null
-$miLog  = Add-TrayMenuItem $menu '打开日志' $null
-$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
-
-# 图标子菜单：DeepSeek 蓝鲸鱼 / 选择自定义
-$script:miIconRoot = Add-TrayMenuItem $menu '图标' $null
-$script:miBrandIcon = Add-TrayMenuItem $script:miIconRoot 'DeepSeek 蓝鲸鱼' { Set-BrandIconMode }
-$script:miBrandIcon.CheckOnClick = $false
-$script:miCustomIcon = Add-TrayMenuItem $script:miIconRoot '选择自定义图标…' {
-    $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Filter = '图标文件 (*.ico)|*.ico|所有文件 (*.*)|*.*'
-    $dlg.Title = '选择图标（.ico）'
-    # 托盘进程无前台窗口，需要一个置顶 owner 才能把对话框带到最前
-    $owner = New-Object System.Windows.Forms.Form
-    $owner.TopMost = $true
-    $owner.ShowInTaskbar = $false
-    $owner.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
-    $owner.Location = New-Object System.Drawing.Point(-3000, -3000)
-    $owner.Size = New-Object System.Drawing.Size(1, 1)
-    try {
-        if ($dlg.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { [void](Set-CustomIcon $dlg.FileName) }
-    } finally {
-        $owner.Dispose()
-    }
-}
-$script:miCustomIcon.CheckOnClick = $false
+$miOpen = Add-TrayMenuItem $menu '打开界面'
+$miLog  = Add-TrayMenuItem $menu '打开日志'
 $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 
 # 开机自启（勾选 = 启动文件夹里有快捷方式；点击即切换）
@@ -519,9 +414,7 @@ function Ensure-DesktopShortcut {
             $lnk.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + (Join-Path $PSScriptRoot 'tray.ps1') + '"'
         }
         $lnk.WorkingDirectory = $PSScriptRoot
-        # 快捷方式图标跟随当前模式
-        $iconFile = if ($script:iconMode -eq 'brand') { $script:brandIconPath } else { $script:iconMode }
-        if ($iconFile -and (Test-Path $iconFile)) { $lnk.IconLocation = $iconFile + ',0' }
+        if ($script:brandIconPath -and (Test-Path $script:brandIconPath)) { $lnk.IconLocation = $script:brandIconPath + ',0' }
         $lnk.Description = 'DeepSeek Harness 系统托盘启动器'
         $lnk.WindowStyle = 7
         $lnk.Save()
@@ -532,7 +425,7 @@ function Ensure-DesktopShortcut {
         return $null
     }
 }
-$script:miAutostart = Add-TrayMenuItem $menu '开机自启' $null
+$script:miAutostart = Add-TrayMenuItem $menu '开机自启'
 $script:miAutostart.CheckOnClick = $false
 $script:miAutostart.add_Click({
     $shortcutPath = Ensure-DesktopShortcut
@@ -572,7 +465,7 @@ if ($shortcutForCheck) {
 Update-AutostartText
 
 # 托盘菜单：重启 Harness
-$miRestart = Add-TrayMenuItem $menu '重启 Harness' $null
+$miRestart = Add-TrayMenuItem $menu '重启 Harness'
 $miRestart.add_Click({
     Write-TrayLog 'restart requested'
     if (-not $script:spawned) {
@@ -604,10 +497,9 @@ $miRestart.add_Click({
     }
 })
 $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
-$miExit = Add-TrayMenuItem $menu '退出' $null
+$miExit = Add-TrayMenuItem $menu '退出'
 $tray.ContextMenuStrip = $menu
 Update-MenuTheme $true
-Update-IconMenuChecks
 
 function Open-HarnessUI {
     if ($script:externalNoToken -and -not $script:harnessUrl) {
