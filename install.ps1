@@ -33,7 +33,8 @@ function Resolve-DshBin {
     $cmd = Get-Command dsh -ErrorAction SilentlyContinue
     if ($cmd) {
         $binDir = Split-Path $cmd.Source -Parent
-        $candidates += (Join-Path (Split-Path $binDir -Parent) '@deepseek-ai\dsh\lib\bin.js')
+        # 全局安装时 $binDir 是 npm 前缀（如 %APPDATA%\npm），包体在其 node_modules 下
+        $candidates += (Join-Path $binDir 'node_modules\@deepseek-ai\dsh\lib\bin.js')
     }
     # 2) 当前 npm 的缓存目录（权威来源，兼容自定义/重定向的缓存路径）
     try {
@@ -128,6 +129,21 @@ if ($remoteMode) {
 }
 Copy-Item $traySource (Join-Path $InstallDir 'tray.ps1') -Force
 
+# 版本文件：让安装目录里的 tray.ps1 知道自己真实版本（缺 package.json 时回退默认会误报“有新版本”）
+$installVersion = ''
+$pkgLocal = Join-Path $PSScriptRoot 'package.json'
+if (Test-Path $pkgLocal) {
+    # 显式 UTF8：PowerShell 5.1 对无 BOM 的 UTF-8 按 ANSI(GBK) 解码，中文 description 会让 JSON 解析失败
+    try { $installVersion = (Get-Content $pkgLocal -Raw -Encoding UTF8 | ConvertFrom-Json).version } catch {}
+}
+if (-not $installVersion -and $remoteMode) {
+    try {
+        $verJson = Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$RepoOwner/$RepoName/$Branch/package.json" -UseBasicParsing | Select-Object -ExpandProperty Content
+        $installVersion = ($verJson | ConvertFrom-Json).version
+    } catch {}
+}
+if ($installVersion) { Set-Content -Path (Join-Path $InstallDir 'VERSION') -Value $installVersion -Encoding ASCII }
+
 # VBS uses the GUI-script host to start PowerShell without attaching a console.
 $launcherSource = Join-Path $PSScriptRoot 'launch-hidden.vbs'
 $launcherDest = Join-Path $InstallDir 'launch-hidden.vbs'
@@ -193,7 +209,7 @@ try {
             $src = Join-Path $bundledPlugin $item
             if (Test-Path $src) { Copy-Item $src $pluginDir -Recurse -Force }
         }
-        $pluginVersion = (Get-Content (Join-Path $bundledPlugin 'package.json') -Raw | ConvertFrom-Json).version
+        $pluginVersion = (Get-Content (Join-Path $bundledPlugin 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
         $dump = (& $nodePath $dshBin --profile web --dump-config 2>&1 | Out-String)
         if ($dump -match 'dsh-plugin-usage-meter') {
             Write-Output ("用量仪表已在 profile 中注册，跳过（内置版本 v" + $pluginVersion + "）")
