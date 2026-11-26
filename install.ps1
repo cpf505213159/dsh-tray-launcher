@@ -3,7 +3,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 # 参数:
 #   -DshPath <path>    手动指定 dsh CLI 入口（@deepseek-ai/dsh/lib/bin.js）
-#   -Icon <path.ico>   托盘与快捷方式图标（可选；不填用仓库自带梁祖图标）
+#   -Icon <path.ico>   自定义托盘图标（可选；默认「自动适配 Windows 深浅主题」）
 #   -ShortcutName <名> 桌面快捷方式名称（默认 DeepSeek Harness）
 #   -Autostart         同时注册开机自启
 #   -Yes               跳过安装前确认提示（自动化场景）
@@ -154,24 +154,33 @@ if (Test-Path $launcherSource) {
     Invoke-WebRequest -Uri $launcherUrl -OutFile $launcherDest -UseBasicParsing
 }
 
-# 预设图标集（icons/：梁祖、鲸鱼娘、DeepSeek）；仓库安装直接复制，远程安装逐个下载
+# 托盘图标：形状源只保留 DeepSeek 鲸鱼，颜色由 tray.ps1 按系统主题在运行时生成
 $iconDir = Join-Path $InstallDir 'icons'
 New-Item -ItemType Directory -Path $iconDir -Force | Out-Null
-$presetFiles = @('liangzu.ico', 'whale-girl.ico', 'deepseek.ico')
-foreach ($f in $presetFiles) {
-    $srcFile = Join-Path $PSScriptRoot ("icons\" + $f)
-    if (Test-Path $srcFile) {
-        Copy-Item $srcFile (Join-Path $iconDir $f) -Force
-    } else {
-        $iconUrl = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/$Branch/icons/$f"
-        Invoke-WebRequest -Uri $iconUrl -OutFile (Join-Path $iconDir $f) -UseBasicParsing
-    }
+$iconSrc = Join-Path $PSScriptRoot 'icons\deepseek.ico'
+if (Test-Path $iconSrc) {
+    Copy-Item $iconSrc (Join-Path $iconDir 'deepseek.ico') -Force
+} else {
+    $iconUrl = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/$Branch/icons/deepseek.ico"
+    Invoke-WebRequest -Uri $iconUrl -OutFile (Join-Path $iconDir 'deepseek.ico') -UseBasicParsing
 }
 
-# 自定义图标（-Icon 参数）：复制到安装目录并写绝对路径；默认使用梁祖预设
-$iconSetting = 'liangzu'
+# 主题支持库（图标着色 + 菜单渲染器）；缺失时托盘会降级为系统默认图标
+$libDir = Join-Path $InstallDir 'lib'
+New-Item -ItemType Directory -Path $libDir -Force | Out-Null
+$themeCsDest = Join-Path $libDir 'TrayTheme.cs'
+$themeCsSrc = Join-Path $PSScriptRoot 'lib\TrayTheme.cs'
+if (Test-Path $themeCsSrc) {
+    Copy-Item $themeCsSrc $themeCsDest -Force
+} else {
+    $csUrl = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/$Branch/lib/TrayTheme.cs"
+    Invoke-WebRequest -Uri $csUrl -OutFile $themeCsDest -UseBasicParsing
+}
+
+# 图标模式：默认 auto 跟随系统主题；-Icon 传入时复制到安装目录并写绝对路径
+$iconSetting = 'auto'
 if ($Icon -and (Test-Path $Icon)) {
-    $iconCopy = Join-Path $InstallDir 'icon.ico'
+    $iconCopy = Join-Path $InstallDir 'custom.ico'
     Copy-Item $Icon $iconCopy -Force
     $iconSetting = $iconCopy
 }
@@ -184,8 +193,24 @@ $lnk = $ws.CreateShortcut($lnkPath)
 $lnk.TargetPath = (Join-Path $env:SystemRoot 'System32\wscript.exe')
 $lnk.Arguments = '"' + $launcherDest + '"'
 $lnk.WorkingDirectory = $InstallDir
-$defaultIcon = Join-Path $iconDir 'liangzu.ico'
-if ($iconSetting -ne 'liangzu') { $lnk.IconLocation = $iconSetting + ',0' } else { $lnk.IconLocation = $defaultIcon + ',0' }
+# 快捷方式图标：自动模式按当前主题先生成一份，托盘启动后还会随主题刷新
+$shortcutIcon = $null
+if ($iconSetting -eq 'auto') {
+    try {
+        Add-Type -AssemblyName System.Drawing
+        Add-Type -Path $themeCsDest -ReferencedAssemblies @('System.Drawing.dll', 'System.Windows.Forms.dll')
+        $light = [TrayTheme]::IsLightTheme()
+        $autoName = if ($light) { 'auto-light.ico' } else { 'auto-dark.ico' }
+        $autoIco = Join-Path $InstallDir $autoName
+        if ([TrayIconFactory]::Build((Join-Path $iconDir 'deepseek.ico'), [TrayTheme]::IconColor($light), $autoIco)) {
+            $shortcutIcon = $autoIco
+        }
+    } catch {}
+} else {
+    $shortcutIcon = $iconSetting
+}
+if (-not $shortcutIcon) { $shortcutIcon = Join-Path $iconDir 'deepseek.ico' }
+$lnk.IconLocation = $shortcutIcon + ',0'
 $lnk.Description = 'DeepSeek Harness 系统托盘启动器'
 $lnk.WindowStyle = 1
 $lnk.Save()
