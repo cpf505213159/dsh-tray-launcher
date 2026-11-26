@@ -35,6 +35,7 @@
     "icons/deepseek.ico",
     "bin/dsh-tray.js",
     "bin/dsh-tray-install.js",
+    "scripts/check-bom.mjs",
     "docs/preview-tray.png",
     "docs/liangzu-icon.png",
     "docs/whale-girl.png",

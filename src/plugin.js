@@ -49,8 +49,15 @@ function apply(ctx) {
   );
   child.unref();
   ctx.on("dispose", () => {
+    // 杀整棵进程树：child 是 powershell，它经 cmd /c 拉起 cmd→node(harness)，
+    // 只 kill powershell 会留下孤儿 harness；用 taskkill /T 连子进程一起收。
     try {
-      child.kill();
+      if (child.pid) {
+        spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+          windowsHide: true,
+          stdio: "ignore",
+        });
+      }
     } catch {
       // already gone
     }

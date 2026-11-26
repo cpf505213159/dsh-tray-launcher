@@ -36,7 +36,7 @@ if (consoleMode) {
     settled = true;
     // 托盘脚本应该常驻；快速退出只有两种情况：单实例锁退场 / 启动失败
     if (code === 0) {
-      console.log("dsh-tray: 已有托盘实例在运行，稍候浏览器会自动打开界面（http://127.0.0.1:3080）。");
+      console.log("dsh-tray: 已有托盘实例在运行，稍候浏览器会自动打开界面。");
       process.exit(0);
     }
     const lastLine = errText.trim().split(/\r?\n/).pop();

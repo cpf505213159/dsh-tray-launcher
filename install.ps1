@@ -3,15 +3,17 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 # 参数:
 #   -DshPath <path>    手动指定 dsh CLI 入口（@deepseek-ai/dsh/lib/bin.js）
-#   -Icon <path.ico>   托盘与快捷方式图标（可选；不填用系统默认图标）
+#   -Icon <path.ico>   托盘与快捷方式图标（可选；不填用仓库自带梁祖图标）
 #   -ShortcutName <名> 桌面快捷方式名称（默认 DeepSeek Harness）
 #   -Autostart         同时注册开机自启
 #   -Yes               跳过安装前确认提示（自动化场景）
 #   -DryRun            只检测与打印，不写入任何文件
+#   -Cwd <dir>         harness 的工作目录（默认 %USERPROFILE%）
 param(
     [string]$DshPath = "",
     [string]$Icon = "",
     [string]$ShortcutName = "DeepSeek Harness",
+    [string]$Cwd = "",
     [switch]$Autostart,
     [switch]$Yes,
     [switch]$DryRun
@@ -83,6 +85,7 @@ Write-Output "dsh bin : $dshBin"
 Write-Output "node    : $nodePath"
 Write-Output "install : $InstallDir"
 Write-Output "shortcut: $(Join-Path ([Environment]::GetFolderPath('Desktop')) ($ShortcutName + '.lnk'))"
+Write-Output ("cwd     : " + $(if ($Cwd -and (Test-Path $Cwd)) { $Cwd } else { $env:USERPROFILE }))
 Write-Output "autostart: $Autostart"
 
 if (-not $nodePath) { Write-Error '未找到 node.exe，请先安装 Node.js。' ; exit 1 }
@@ -162,7 +165,7 @@ $ws = New-Object -ComObject WScript.Shell
 $desktop = [Environment]::GetFolderPath('Desktop')
 $lnkPath = Join-Path $desktop ($ShortcutName + '.lnk')
 $lnk = $ws.CreateShortcut($lnkPath)
-$lnk.TargetPath = 'C:\WINDOWS\System32\wscript.exe'
+$lnk.TargetPath = (Join-Path $env:SystemRoot 'System32\wscript.exe')
 $lnk.Arguments = '"' + $launcherDest + '"'
 $lnk.WorkingDirectory = $InstallDir
 $defaultIcon = Join-Path $iconDir 'liangzu.ico'
@@ -206,10 +209,12 @@ try {
 }
 
 # 配置文件
+$cwdSetting = if ($Cwd -and (Test-Path $Cwd)) { $Cwd } else { $env:USERPROFILE }
 $cfg = @{
     dshBin        = $dshBin
     node          = $nodePath
     url           = 'http://127.0.0.1:3080'
+    cwd           = $cwdSetting
     icon          = $iconSetting
     shortcut      = $lnkPath
     pluginVersion = $pluginVersion

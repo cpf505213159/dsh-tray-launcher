@@ -38,6 +38,7 @@ function Get-CfgValue($name, $default) {
 
 $url = Get-CfgValue 'url' 'http://127.0.0.1:3080'
 $cwd = Get-CfgValue 'cwd' $env:USERPROFILE
+if (-not (Test-Path $cwd)) { $cwd = $env:USERPROFILE }
 
 # ---- 定位 node.exe ----
 # 优先系统正式安装的 node：codex 等工具链的 node 可能是转发桩，
@@ -63,7 +64,8 @@ function Find-DshBin {
     $cmd = Get-Command dsh -ErrorAction SilentlyContinue
     if ($cmd) {
         $binDir = Split-Path $cmd.Source -Parent
-        $candidates += (Join-Path (Split-Path $binDir -Parent) '@deepseek-ai\dsh\lib\bin.js')
+        # .bin/shim 所在目录本身就是 npm 全局前缀，包体在 node_modules 下
+        $candidates += (Join-Path $binDir 'node_modules\@deepseek-ai\dsh\lib\bin.js')
     }
     # 2) 当前 npm 的缓存目录（纯 PowerShell 探测，绝不执行外部命令：
     #    无控制台进程执行外部命令会触发 PowerShell 分配可见控制台=黑窗）
@@ -100,7 +102,7 @@ function Find-DshBin {
     }
     $globalRoots += (Join-Path $env:APPDATA 'npm')
     foreach ($g in $globalRoots) {
-        if ($g) { $candidates += (Join-Path $g '@deepseek-ai\dsh\lib\bin.js') }
+        if ($g) { $candidates += (Join-Path $g 'node_modules\@deepseek-ai\dsh\lib\bin.js') }
     }
     # 4) 常见兜底位置
     $localNpx = Join-Path $env:LOCALAPPDATA 'npm-cache\_npx'
@@ -126,14 +128,9 @@ if ($ConsoleMode) {
     exit $LASTEXITCODE
 }
 
-if (-not $bin) {
-    Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show(
-        '未找到 DeepSeek Harness CLI (lib/bin.js)。' + "`n" +
-        '请运行 install.ps1 -DshPath <bin.js 路径> 重新安装，或确认已安装 dsh。',
-        'DeepSeek Harness') | Out-Null
-    exit 1
-}
+# 注意：不在此处提前因找不到 bin 而退出——托盘可能只是"挂载"已运行的外部
+# harness（例如作为 dsh 插件随 Harness 启动，harness 已在监听），此时根本不需要
+# bin。只有真正要"拉起" harness 的分支才要求 bin（见下方启动分支）。
 
 # ---- 托盘模式 ----
 $script:TrayVersion = '1.5.0'
@@ -177,9 +174,11 @@ if (-not $NoRespawn) {
         try {
             $psi = New-Object System.Diagnostics.ProcessStartInfo
             $psi.FileName = 'powershell.exe'
-            $respawnArgs = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -NoRespawn'
+            # 所有脚本参数必须放在 -File 之后（powershell.exe 只把 -File 之后的当脚本参数）
+            $respawnArgs = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $PSCommandPath + '" -NoRespawn'
             if ($script:dataDir -ne $PSScriptRoot) { $respawnArgs = $respawnArgs + ' -DataDir "' + $script:dataDir + '"' }
-            $psi.Arguments = $respawnArgs + ' -File "' + $PSCommandPath + '"'
+            if ($NoOpen) { $respawnArgs = $respawnArgs + ' -NoOpen' }
+            $psi.Arguments = $respawnArgs
             $psi.UseShellExecute = $false
             $psi.CreateNoWindow = $true
             [System.Diagnostics.Process]::Start($psi) | Out-Null
@@ -196,7 +195,36 @@ $trayLog = Join-Path $logDir 'dsh-tray.log'
 
 function Write-TrayLog($msg) {
     $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg
+    # 托盘日志也做轮转，避免长期运行无限增长
+    if ((Test-Path $trayLog) -and ((Get-Item $trayLog).Length -gt 10485760)) {
+        Move-Item $trayLog ($trayLog + '.1') -Force -ErrorAction SilentlyContinue
+    }
     Add-Content -Path $trayLog -Value $line -Encoding UTF8
+}
+
+# 日志轮转：单个日志超过阈值就先改名 .1 再继续写，避免无限增长
+function Rotate-Log($path, [long]$maxBytes = 10485760) {
+    try {
+        if ((Test-Path $path) -and ((Get-Item $path).Length -gt $maxBytes)) {
+            Move-Item $path ($path + '.1') -Force -ErrorAction SilentlyContinue
+        }
+    } catch {}
+}
+
+# ---- 通用后台任务（不阻塞 UI 线程）：tick 里轮询完成 ----
+$script:bgProc = $null
+$script:bgKind = ''
+$script:bgData = @{}
+function Start-Bg([string]$kind, $psi, $data) {
+    try {
+        $p = New-Object System.Diagnostics.Process
+        $p.StartInfo = $psi
+        [void]$p.Start()
+        $script:bgProc = $p
+        $script:bgKind = $kind
+        $script:bgData = $data
+        return $true
+    } catch { return $false }
 }
 
 # ---- 界面地址解析 ----
@@ -204,24 +232,44 @@ function Write-TrayLog($msg) {
 # 用裸地址会被要求“reopen the URL printed by dsh web”。托盘从 harness 的 stdout
 # 日志里取最后一次打印的带 token 地址；取不到（旧版 harness）再退回配置里的 url。
 $script:harnessUrl = $null
-function Get-HarnessUrl {
-    if ($script:harnessUrl) { return $script:harnessUrl }
+$script:outLogStart = 0
+# 每次都从日志实时取（不缓存），用于"就绪判定 + 取带 token 地址"：
+# 避免端口先通、日志后写的竞态导致首开裸地址 401；重启后也能拿到新 token。
+function Get-LogHarnessUrl {
+    # 只从本次启动后新增的日志区间找 token，避免把上一次运行的旧 token 当本次地址
     try {
         if (Test-Path $outLog) {
-            $m = Select-String -Path $outLog -Pattern 'dsh web:\s+(https?://\S+)' -AllMatches -ErrorAction SilentlyContinue |
-                Select-Object -Last 1
-            if ($m) {
-                $u = $m.Matches[$m.Matches.Count - 1].Groups[1].Value.Trim()
-                if ($u -match '^https?://') { $script:harnessUrl = $u; return $u }
-            }
+            $fs = [System.IO.File]::Open($outLog, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            try {
+                if ($script:outLogStart -gt 0 -and $script:outLogStart -le $fs.Length) { $fs.Position = $script:outLogStart }
+                $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)
+                $text = $sr.ReadToEnd()
+                $mm = [regex]::Matches($text, 'dsh web:\s+(https?://\S+)')
+                if ($mm.Count -gt 0) {
+                    $u = $mm[$mm.Count - 1].Groups[1].Value.Trim()
+                    if ($u -match '^https?://') { return $u }
+                }
+            } finally { $fs.Close() }
         }
     } catch {}
+    return $null
+}
+function Get-HarnessUrl {
+    if ($script:harnessUrl) { return $script:harnessUrl }
+    $u = Get-LogHarnessUrl
+    if ($u) { $script:harnessUrl = $u; return $u }
     return $url
+}
+function Get-HarnessPort {
+    $u = Get-LogHarnessUrl
+    if (-not $u) { $u = $url }
+    try { $p = ([uri]$u).Port; if ($p -gt 0) { return $p } } catch {}
+    return 3080
 }
 
 # 单实例保护：托盘只允许一个
 $createdNew = $null
-$mutex = New-Object System.Threading.Mutex($true, 'Global\dsh-tray-launcher', [ref]$createdNew)
+$mutex = New-Object System.Threading.Mutex($true, 'Local\dsh-tray-launcher', [ref]$createdNew)
 if (-not $createdNew) {
     Write-TrayLog 'another tray instance is running; opening UI and exiting'
     if (-not $NoOpen) { Start-Process (Get-HarnessUrl) }
@@ -316,15 +364,19 @@ function Save-IconConfig($value) {
 
 # ---- 内置用量仪表（dsh-plugin-usage-meter）----
 function Compare-Version($a, $b) {
+    # 只比核心三段数字；核心相同后再看预发布：带 -rc/-beta 的版本低于不带
     $pa = @(); $pb = @()
-    foreach ($x in ($a -split '\.')) { try { $pa += [int]$x } catch { $pa += 0 } }
-    foreach ($x in ($b -split '\.')) { try { $pb += [int]$x } catch { $pb += 0 } }
+    foreach ($x in ((($a -split '-')[0]) -split '\.')) { try { $pa += [int]$x } catch { $pa += 0 } }
+    foreach ($x in ((($b -split '-')[0]) -split '\.')) { try { $pb += [int]$x } catch { $pb += 0 } }
     for ($i = 0; $i -lt 3; $i++) {
         $va = if ($i -lt $pa.Count) { $pa[$i] } else { 0 }
         $vb = if ($i -lt $pb.Count) { $pb[$i] } else { 0 }
         if ($va -gt $vb) { return 1 }
         if ($va -lt $vb) { return -1 }
     }
+    $preA = ($a -match '-'); $preB = ($b -match '-')
+    if ($preA -and -not $preB) { return -1 }
+    if (-not $preA -and $preB) { return 1 }
     return 0
 }
 
@@ -428,6 +480,9 @@ $script:customMenuItem.add_Click({
         $dest = Join-Path $script:dataDir 'custom.ico'
         Copy-Item $dlg.FileName $dest -Force
         Apply-Icon $dest $dest
+        # Apply-Icon 会把 key 设成路径，这里纠正回 'custom' 让菜单正确勾选
+        $script:currentIconKey = 'custom'
+        Update-IconMenuChecks
     }
 })
 $miIcon.DropDownItems.Add($script:customMenuItem) | Out-Null
@@ -450,10 +505,10 @@ function Ensure-DesktopShortcut {
         $lnk = $ws.CreateShortcut($lnkPath)
         $vbs = Join-Path $PSScriptRoot 'launch-hidden.vbs'
         if (Test-Path $vbs) {
-            $lnk.TargetPath = 'C:\WINDOWS\System32\wscript.exe'
+            $lnk.TargetPath = (Join-Path $env:SystemRoot 'System32\wscript.exe')
             $lnk.Arguments = '"' + $vbs + '"'
         } else {
-            $lnk.TargetPath = 'C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe'
+            $lnk.TargetPath = (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
             $lnk.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + (Join-Path $PSScriptRoot 'tray.ps1') + '"'
         }
         $lnk.WorkingDirectory = $PSScriptRoot
@@ -518,6 +573,13 @@ function Update-UsageStatusText {
 }
 Update-UsageStatusText
 $script:miUsageUpdate.add_Click({
+    if ($script:bgProc -and -not $script:bgProc.HasExited) {
+        $tray.BalloonTipTitle = 'DeepSeek Harness'
+        $tray.BalloonTipText = '有后台任务正在进行，请稍候…'
+        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+        $tray.ShowBalloonTip(2000)
+        return
+    }
     $bundled = Find-BundledPlugin
     if (-not $bundled) {
         $tray.BalloonTipTitle = 'DeepSeek Harness'
@@ -535,22 +597,23 @@ $script:miUsageUpdate.add_Click({
             $src = Join-Path $bundled $item
             if (Test-Path $src) { Copy-Item $src $pluginDir -Recurse -Force }
         }
-        [void](Run-DshPluginAdd $pluginDir)
-        if ($newVer) {
-            Save-CfgValue 'pluginVersion' $newVer
-            Save-CfgValue 'pluginDir' $pluginDir
-            $script:pluginVersion = $newVer
-        }
-        Update-UsageStatusText
+        # 异步执行 dsh plugin add，避免网络/磁盘慢时卡住托盘消息循环
+        $cmdLine = '/c ""' + $node + '" "' + $bin + '" plugin --profile web add "' + $pluginDir + '" >> "' + $outLog + '" 2>> "' + $errLog + '" "'
+        $pAdd = New-Object System.Diagnostics.ProcessStartInfo
+        $pAdd.FileName = $env:ComSpec
+        $pAdd.Arguments = $cmdLine
+        $pAdd.UseShellExecute = $false
+        $pAdd.CreateNoWindow = $true
+        if (-not (Start-Bg 'usage' $pAdd @{ version = $newVer; dir = $pluginDir })) { throw '无法启动 dsh plugin add' }
         $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = ('用量仪表已更新到 v' + $newVer + '，请重启 Harness 生效（菜单 → 重启 Harness）')
+        $tray.BalloonTipText = '正在更新用量仪表…（完成后会提示重启 Harness）'
         $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-        $tray.ShowBalloonTip(3000)
-        Write-TrayLog ('usage meter updated to v' + $newVer)
+        $tray.ShowBalloonTip(2000)
+        Write-TrayLog 'usage meter update started (async)'
     } catch {
-        Write-TrayLog ('usage meter update failed: ' + $_.Exception.Message)
+        Write-TrayLog ('usage meter update failed to start: ' + $_.Exception.Message)
         $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '用量仪表更新失败，详见日志'
+        $tray.BalloonTipText = '用量仪表更新启动失败，详见日志'
         $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Error
         $tray.ShowBalloonTip(3000)
     }
@@ -561,7 +624,12 @@ $menu.Items.Add($script:miUsage) | Out-Null
 
 # 启动器自更新：npm 查询最新版 + 一键更新
 $script:latestTrayVersion = ''
-$script:selfCheckDone = $false
+$script:selfCheckDone = $false      # 自动检查是否已完成
+$script:checkStarted = $false       # 自动检查是否已发起
+$script:checkPending = $false       # 是否有 npm view 在跑
+$script:checkProc = $null
+$script:checkManual = $false        # 是否用户手动触发
+$script:npmViewFile = Join-Path $script:dataDir 'npm-view.txt'
 $script:miSelf = New-Object System.Windows.Forms.ToolStripMenuItem('更新启动器')
 $script:miSelfStatus = New-Object System.Windows.Forms.ToolStripMenuItem(('当前 v' + $script:TrayVersion))
 $script:miSelfStatus.Enabled = $false
@@ -581,13 +649,12 @@ function Find-NpmCmd {
     return $null
 }
 
-function Get-LatestTrayVersion {
-    # 隐藏执行 npm view（同 Run-DshPluginAdd 的 cmd /c + 重定向模式，不弹控制台）
+function Start-NpmVersionCheck {
+    # 异步：spawn 隐藏 cmd 跑 npm view 到文件后立即返回，绝不阻塞 UI 线程
     $npm = Find-NpmCmd
-    if (-not $npm) { return '' }
-    $tmp = Join-Path $script:dataDir 'npm-view.txt'
-    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
-    $cmdLine = '/c ""' + $npm + '" view dsh-tray-launcher version > "' + $tmp + '" 2>nul "'
+    if (-not $npm) { return $false }
+    Remove-Item $script:npmViewFile -Force -ErrorAction SilentlyContinue
+    $cmdLine = '/c ""' + $npm + '" view dsh-tray-launcher version > "' + $script:npmViewFile + '" 2>nul "'
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $env:ComSpec
     $psi.Arguments = $cmdLine
@@ -595,50 +662,89 @@ function Get-LatestTrayVersion {
     $psi.CreateNoWindow = $true
     $p = New-Object System.Diagnostics.Process
     $p.StartInfo = $psi
-    [void]$p.Start()
-    $p.WaitForExit(20000) | Out-Null
-    try { if (-not $p.HasExited) { $p.Kill() } } catch {}
+    try { [void]$p.Start() } catch { return $false }
+    $script:checkProc = $p
+    $script:checkPending = $true
+    return $true
+}
+
+function Complete-NpmVersionCheck {
+    # Timer 调用：进程结束后读文件返回版本号（'' = 检查完成但失败/空）；未完成返回 $null
+    if (-not ($script:checkPending -and $script:checkProc)) { return $null }
+    if (-not $script:checkProc.HasExited) { return $null }
+    $script:checkPending = $false
+    $v = ''
     try {
-        if (Test-Path $tmp) {
-            $v = (Get-Content $tmp -Raw).Trim()
-            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
-            if ($v -match '^[0-9]+\.[0-9]+\.[0-9]+') { return $Matches[0] }
+        if (Test-Path $script:npmViewFile) {
+            $raw = (Get-Content $script:npmViewFile -Raw).Trim()
+            Remove-Item $script:npmViewFile -Force -ErrorAction SilentlyContinue
+            if ($raw -match '^[0-9]+\.[0-9]+\.[0-9]+') { $v = $Matches[0] }
         }
     } catch {}
-    return ''
+    try { $script:checkProc.Dispose() } catch {}
+    $script:checkProc = $null
+    return $v
+}
+
+function Apply-SelfCheckResult($latest) {
+    if (-not $latest) {
+        if ($script:checkManual) {
+            $script:miSelfStatus.Text = ('当前 v' + $script:TrayVersion)
+            $tray.BalloonTipTitle = 'DeepSeek Harness'
+            $tray.BalloonTipText = '检查更新失败（网络或 npm 不可用），详见日志'
+            $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Warning
+            $tray.ShowBalloonTip(2500)
+        }
+        Write-TrayLog 'tray launcher self-check: failed (no version)'
+        return
+    }
+    if ((Compare-Version $latest $script:TrayVersion) -gt 0) {
+        $script:latestTrayVersion = $latest
+        $script:miSelfStatus.Text = ('当前 v' + $script:TrayVersion + ' · 最新 v' + $latest)
+        $script:miSelfUpdate.Text = '更新到 v' + $latest
+        $script:miSelfUpdate.Enabled = $true
+        $tray.BalloonTipTitle = 'DeepSeek Harness'
+        $tray.BalloonTipText = ('托盘启动器有新版本 v' + $latest + '（托盘菜单 → 更新启动器）')
+        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+        $tray.ShowBalloonTip(4000)
+        Write-TrayLog ('tray launcher update available: v' + $latest)
+    } else {
+        $script:miSelfStatus.Text = ('当前 v' + $script:TrayVersion + ' · 已是最新')
+        $script:miSelfUpdate.Enabled = $false
+        if ($script:checkManual) {
+            $tray.BalloonTipTitle = 'DeepSeek Harness'
+            $tray.BalloonTipText = ('已是最新版 v' + $script:TrayVersion)
+            $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+            $tray.ShowBalloonTip(2500)
+        }
+        Write-TrayLog ('tray launcher self-check: up to date (v' + $script:TrayVersion + ')')
+    }
+    $script:checkManual = $false
 }
 
 $script:miSelfCheck.add_Click({
     $script:miSelfStatus.Text = '检查中…'
-    $latest = Get-LatestTrayVersion
-    if (-not $latest) {
-        $script:miSelfStatus.Text = ('当前 v' + $script:TrayVersion)
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '检查更新失败（网络或 npm 不可用），详见日志'
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Warning
-        $tray.ShowBalloonTip(2500)
-        return
-    }
-    $script:miSelfStatus.Text = ('当前 v' + $script:TrayVersion + ' · 最新 v' + $latest)
-    if ((Compare-Version $latest $script:TrayVersion) -gt 0) {
-        $script:latestTrayVersion = $latest
-        $script:miSelfUpdate.Text = '更新到 v' + $latest
-        $script:miSelfUpdate.Enabled = $true
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = ('托盘启动器有新版本 v' + $latest)
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-        $tray.ShowBalloonTip(3000)
-        Write-TrayLog ('tray launcher update available: v' + $latest)
-    } else {
-        $script:miSelfUpdate.Enabled = $false
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = ('已是最新版 v' + $script:TrayVersion)
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-        $tray.ShowBalloonTip(2500)
+    $script:checkManual = $true
+    if (-not $script:checkPending) {
+        if (-not (Start-NpmVersionCheck)) {
+            $script:checkManual = $false
+            $script:miSelfStatus.Text = ('当前 v' + $script:TrayVersion)
+            $tray.BalloonTipTitle = 'DeepSeek Harness'
+            $tray.BalloonTipText = '未找到 npm，无法检查更新'
+            $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Warning
+            $tray.ShowBalloonTip(2500)
+        }
     }
 })
 
 $script:miSelfUpdate.add_Click({
+    if ($script:bgProc -and -not $script:bgProc.HasExited) {
+        $tray.BalloonTipTitle = 'DeepSeek Harness'
+        $tray.BalloonTipText = '有后台任务正在进行，请稍候…'
+        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+        $tray.ShowBalloonTip(2000)
+        return
+    }
     $npm = Find-NpmCmd
     if (-not $npm) {
         $tray.BalloonTipTitle = 'DeepSeek Harness'
@@ -648,32 +754,23 @@ $script:miSelfUpdate.add_Click({
         return
     }
     $cmdLine = '/c ""' + $npm + '" install -g dsh-tray-launcher >> "' + $outLog + '" 2>> "' + $errLog + '" "'
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $env:ComSpec
-    $psi.Arguments = $cmdLine
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
-    $p = New-Object System.Diagnostics.Process
-    $p.StartInfo = $psi
-    [void]$p.Start()
-    $p.WaitForExit()
-    if ($p.ExitCode -eq 0) {
-        $ver = $script:latestTrayVersion
-        if (-not $ver) { $ver = Get-LatestTrayVersion }
-        $script:miSelfStatus.Text = ('已更新 v' + $ver + '，重启托盘生效')
-        $script:miSelfUpdate.Enabled = $false
+    $pUpd = New-Object System.Diagnostics.ProcessStartInfo
+    $pUpd.FileName = $env:ComSpec
+    $pUpd.Arguments = $cmdLine
+    $pUpd.UseShellExecute = $false
+    $pUpd.CreateNoWindow = $true
+    if (-not (Start-Bg 'selfupdate' $pUpd @{ version = $script:latestTrayVersion })) {
         $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = ('托盘启动器已更新到 v' + $ver + '，重启托盘后生效')
-        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-        $tray.ShowBalloonTip(3000)
-        Write-TrayLog ('tray launcher updated to v' + $ver)
-    } else {
-        $tray.BalloonTipTitle = 'DeepSeek Harness'
-        $tray.BalloonTipText = '更新失败（npm 退出码 ' + $p.ExitCode + '），详见日志'
+        $tray.BalloonTipText = '启动更新失败，详见日志'
         $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Error
-        $tray.ShowBalloonTip(3000)
-        Write-TrayLog ('tray launcher self-update failed, exit ' + $p.ExitCode)
+        $tray.ShowBalloonTip(2500)
+        return
     }
+    $tray.BalloonTipTitle = 'DeepSeek Harness'
+    $tray.BalloonTipText = '正在更新启动器…（完成后提示重启托盘）'
+    $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+    $tray.ShowBalloonTip(2000)
+    Write-TrayLog 'tray launcher self-update started (async)'
 })
 $script:miSelf.DropDownItems.Add($script:miSelfStatus) | Out-Null
 $script:miSelf.DropDownItems.Add($script:miSelfCheck) | Out-Null
@@ -684,8 +781,18 @@ $menu.Items.Add($script:miSelf) | Out-Null
 $miRestart = $menu.Items.Add('重启 Harness')
 $miRestart.add_Click({
     Write-TrayLog 'restart requested'
+    if (-not $script:spawned) {
+        $tray.BalloonTipTitle = 'DeepSeek Harness'
+        $tray.BalloonTipText = '当前是外部 Harness（非本托盘启动），请在其控制台手动重启'
+        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Warning
+        $tray.ShowBalloonTip(3000)
+        return
+    }
+    $port = Get-HarnessPort
     Stop-Harness
-    Start-Sleep -Seconds 2
+    # 等端口真正释放再拉起，避免 EADDRINUSE
+    for ($i = 0; $i -lt 50 -and (Test-PortOpen $port); $i++) { Start-Sleep -Milliseconds 200 }
+    $script:harnessUrl = $null
     try {
         Start-HarnessProcess
         $script:opened = $false   # 端口就绪后重新打开浏览器
@@ -710,7 +817,17 @@ $miExit = $menu.Items.Add('退出')
 $tray.ContextMenuStrip = $menu
 Update-IconMenuChecks
 
-$miOpen.add_Click({ Start-Process (Get-HarnessUrl) })
+function Open-HarnessUI {
+    if ($script:externalNoToken -and -not $script:harnessUrl) {
+        $tray.BalloonTipTitle = 'DeepSeek Harness'
+        $tray.BalloonTipText = '无法自动获取访问令牌，请在 Harness 原窗口打开它打印的带 ?token= 的地址。'
+        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Warning
+        $tray.ShowBalloonTip(5000)
+        return
+    }
+    Start-Process (Get-HarnessUrl)
+}
+$miOpen.add_Click({ Open-HarnessUI })
 $miLog.add_Click({ Start-Process notepad $outLog })
 
 # ---- 端口探测（纯 .NET，避免加载 NetTCPIP/CIM 模块）----
@@ -742,25 +859,21 @@ function Invoke-MemoryTrim {
     } catch {}
 }
 
-# ---- 停止 Harness（端口占用者 + 命令行含 dsh 的 node 进程）----
+# ---- 停止 Harness ----
+# 只停止"本托盘自己拉起"的 harness 进程树；复用外部已运行的 harness 时不动它，
+# 避免误杀无关的 dsh 进程（含其它 profile/前端），退出托盘也不影响外部服务。
 function Stop-Harness {
-    $pids = @()
-    # 托盘自己拉起的 harness：优先用进程句柄，避免任何模块加载
     if ($script:spawned -and $script:proc) {
-        try { if (-not $script:proc.HasExited) { $pids += $script:proc.Id } } catch {}
-    }
-    if ($pids.Count -eq 0) {
-        # 外部启动的 harness：才走 CIM 查端口占用者（低频路径）
         try {
-            $dshProcs = Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
-                Where-Object { $_.CommandLine -match 'dsh' } |
-                Select-Object -ExpandProperty ProcessId
-            $pids += $dshProcs
+            if (-not $script:proc.HasExited) {
+                & "$env:SystemRoot\System32\taskkill.exe" /PID $script:proc.Id /T /F 2>$null | Out-Null
+            }
         } catch {}
+        $script:spawned = $false
+    } else {
+        Write-TrayLog 'external harness is not owned by tray; leaving it running'
     }
-    $pids | Where-Object { $_ } | Sort-Object -Unique | ForEach-Object {
-        Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue
-    }
+    $script:harnessUrl = $null
     Write-TrayLog 'stop requested'
     Invoke-MemoryTrim
 }
@@ -772,11 +885,23 @@ $miExit.add_Click({
     $tray.Visible = $false
     [System.Windows.Forms.Application]::Exit()
 })
-$tray.add_DoubleClick({ Start-Process (Get-HarnessUrl) })
+$tray.add_DoubleClick({ Open-HarnessUI })
 
 # ---- 启动 harness 进程（CreateNoWindow：从 API 层面禁止控制台）----
 function Start-HarnessProcess {
-    $cmdLine = '/c ""' + $node + '" "' + $bin + '" web >> "' + $outLog + '" 2>> "' + $errLog + '" "'
+    Rotate-Log $outLog
+    Rotate-Log $errLog
+    # 记录本次启动时输出日志的末尾位置；Get-LogHarnessUrl 只在这之后找新 token
+    try { $script:outLogStart = if (Test-Path $outLog) { (Get-Item $outLog).Length } else { 0 } } catch { $script:outLogStart = 0 }
+    # 把配置里 url 的端口/主机传给 dsh web，保证监听端口与"就绪判定/打开地址"一致
+    $portArg = ''
+    $hostArg = ''
+    try {
+        $u = [uri]$url
+        if ($u.Port -gt 0) { $portArg = ' --port ' + $u.Port }
+        if ($u.Host) { $hostArg = ' --host ' + $u.Host }
+    } catch {}
+    $cmdLine = '/c ""' + $node + '" "' + $bin + '" web' + $portArg + $hostArg + ' >> "' + $outLog + '" 2>> "' + $errLog + '" "'
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $env:ComSpec
     $psi.Arguments = $cmdLine
@@ -793,15 +918,37 @@ function Start-HarnessProcess {
 # ---- 启动 harness（已运行则只挂托盘）----
 $script:spawned = $false
 $script:proc = $null
+$script:externalNoToken = $false
 
-$already = Test-PortOpen 3080
+$already = Test-PortOpen (Get-HarnessPort)
 if ($already) {
-    Write-TrayLog 'harness already listening on 3080; tray attached'
-    $tray.BalloonTipTitle = 'DeepSeek Harness'
-    $tray.BalloonTipText = '已在运行'
-    $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-    $tray.ShowBalloonTip(2500)
+    $attachUrl = Get-LogHarnessUrl
+    if ($attachUrl) {
+        $script:harnessUrl = $attachUrl
+        Write-TrayLog ('harness already listening on port ' + (Get-HarnessPort) + '; tray attached')
+        $tray.BalloonTipTitle = 'DeepSeek Harness'
+        $tray.BalloonTipText = '已在运行'
+        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+        $tray.ShowBalloonTip(2500)
+    } else {
+        # 外部已有 harness 在监听，但拿不到它进程内存里的 ?token=，裸地址会 401。
+        # 标记 externalNoToken：不自动开浏览器，提示用户用原窗口打印的带 token 地址。
+        $script:externalNoToken = $true
+        Write-TrayLog ('port ' + (Get-HarnessPort) + ' already in use but no token URL in log (external harness?); attached without owning it')
+        $tray.BalloonTipTitle = 'DeepSeek Harness'
+        $tray.BalloonTipText = '检测到 Harness 已在运行，但无法自动获取访问令牌。请在其原窗口打开 dsh 打印的带 ?token= 的地址（或右击托盘「重启 Harness」由本托盘接管）。'
+        $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Warning
+        $tray.ShowBalloonTip(6000)
+    }
 } else {
+    if (-not $bin) {
+        Add-Type -AssemblyName System.Windows.Forms
+        [System.Windows.Forms.MessageBox]::Show(
+            '未找到 DeepSeek Harness CLI (lib/bin.js)。' + "`n" +
+            '请运行 install.ps1 -DshPath <bin.js 路径> 重新安装，或确认已安装 dsh。',
+            'DeepSeek Harness') | Out-Null
+        exit 1
+    }
     try {
         Start-HarnessProcess
         $tray.BalloonTipTitle = 'DeepSeek Harness'
@@ -842,34 +989,91 @@ $timer.add_Tick({
     # 每 20 个 tick（约 1 分钟）回收一次工作集：长跑进程的消息循环 + 轮询会产生
     # 大量短命对象，定期 GC + EmptyWorkingSet 能把常驻读数压回实际在用的量。
     if ($script:tick % 20 -eq 0) { Invoke-MemoryTrim }
-    if (-not $NoOpen -and -not $script:opened) {
-        if (Test-PortOpen 3080) {
+
+    # 就绪判定：优先用日志里带 token 的地址(及其端口)判端口，再打开该地址；
+    # 拿不到 token（旧版 harness）则等约 15s 后按配置端口兜底开裸地址。
+    if (-not $NoOpen -and -not $script:opened -and -not $script:externalNoToken) {
+        $logUrl = Get-LogHarnessUrl
+        $target = $null
+        if ($logUrl) {
+            $p = 3080
+            try { $p = ([uri]$logUrl).Port } catch {}
+            if (Test-PortOpen $p) { $target = $logUrl }
+        } elseif ($script:tick -ge 5 -and (Test-PortOpen (Get-HarnessPort))) {
+            $target = Get-HarnessUrl
+        }
+        if ($target) {
             $script:opened = $true
-            Start-Process (Get-HarnessUrl)
-            Write-TrayLog 'browser opened'
+            $script:harnessUrl = $target
+            Start-Process $target
+            Write-TrayLog ('browser opened: ' + $target)
         }
     }
-    # 启动后首次 tick 检查托盘启动器自身更新（只查一次；放在浏览器检测之后，
-    # 端口就绪开页面不受检查阻塞影响；图标已显示，短暂阻塞可接受）
+
+    # 自更新：首次 tick 异步发起 npm view（不阻塞 UI），后续 tick 轮询结果
     if (-not $script:selfCheckDone) {
-        $script:selfCheckDone = $true
-        try {
-            $latest = Get-LatestTrayVersion
-            if ($latest -and (Compare-Version $latest $script:TrayVersion) -gt 0) {
-                $script:latestTrayVersion = $latest
-                $script:miSelfStatus.Text = ('当前 v' + $script:TrayVersion + ' · 最新 v' + $latest)
-                $script:miSelfUpdate.Text = '更新到 v' + $latest
-                $script:miSelfUpdate.Enabled = $true
-                $tray.BalloonTipTitle = 'DeepSeek Harness'
-                $tray.BalloonTipText = ('托盘启动器有新版本 v' + $latest + '（托盘菜单 → 更新启动器）')
-                $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-                $tray.ShowBalloonTip(4000)
-                Write-TrayLog ('tray launcher update available: v' + $latest)
-            } else {
-                Write-TrayLog ('tray launcher self-check: up to date (v' + $script:TrayVersion + ')')
-            }
-        } catch {}
+        if (-not $script:checkStarted -and -not $script:checkPending) {
+            $script:checkStarted = $true
+            [void](Start-NpmVersionCheck)
+        }
+        $v = Complete-NpmVersionCheck
+        if ($null -ne $v) {
+            Apply-SelfCheckResult $v
+            $script:selfCheckDone = $true
+        }
+    } elseif ($script:checkPending) {
+        # 自动检查完成后，用户又点了"检查更新"
+        $v = Complete-NpmVersionCheck
+        if ($null -ne $v) { Apply-SelfCheckResult $v }
     }
+
+    # 后台任务完成回调（用量仪表更新 / 启动器自更新），异步不卡 UI
+    if ($script:bgProc -and $script:bgProc.HasExited) {
+        $bgCode = $script:bgProc.ExitCode
+        $bgKind = $script:bgKind
+        $bgData = $script:bgData
+        try { $script:bgProc.Dispose() } catch {}
+        $script:bgProc = $null; $script:bgKind = ''; $script:bgData = @{}
+        if ($bgKind -eq 'usage') {
+            if ($bgCode -eq 0) {
+                if ($bgData.version) {
+                    Save-CfgValue 'pluginVersion' $bgData.version
+                    Save-CfgValue 'pluginDir' $bgData.dir
+                    $script:pluginVersion = $bgData.version
+                }
+                Update-UsageStatusText
+                $tray.BalloonTipTitle = 'DeepSeek Harness'
+                $tray.BalloonTipText = ('用量仪表已更新到 v' + $bgData.version + '，请重启 Harness 生效（菜单 → 重启 Harness）')
+                $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+                $tray.ShowBalloonTip(3000)
+                Write-TrayLog ('usage meter updated to v' + $bgData.version)
+            } else {
+                $tray.BalloonTipTitle = 'DeepSeek Harness'
+                $tray.BalloonTipText = '用量仪表更新失败（dsh 退出码 ' + $bgCode + '），详见日志'
+                $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Error
+                $tray.ShowBalloonTip(3000)
+                Write-TrayLog ('usage meter update failed, exit ' + $bgCode)
+            }
+        } elseif ($bgKind -eq 'selfupdate') {
+            if ($bgCode -eq 0) {
+                $ver = if ($bgData.version) { $bgData.version } else { 'latest' }
+                $script:miSelfStatus.Text = ('已更新 v' + $ver + '，重启托盘生效')
+                $script:miSelfUpdate.Enabled = $false
+                $tray.BalloonTipTitle = 'DeepSeek Harness'
+                $tray.BalloonTipText = ('托盘启动器已更新到 v' + $ver + '，重启托盘后生效')
+                $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+                $tray.ShowBalloonTip(3000)
+                Write-TrayLog ('tray launcher updated to v' + $ver)
+            } else {
+                $tray.BalloonTipTitle = 'DeepSeek Harness'
+                $tray.BalloonTipText = '启动器更新失败（npm 退出码 ' + $bgCode + '），详见日志'
+                $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Error
+                $tray.ShowBalloonTip(3000)
+                Write-TrayLog ('tray launcher self-update failed, exit ' + $bgCode)
+            }
+        }
+    }
+
     if ($script:spawned -and $script:proc -and $script:proc.HasExited) {
         Write-TrayLog 'harness exited'
         $tray.BalloonTipTitle = 'DeepSeek Harness'

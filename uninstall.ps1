@@ -11,9 +11,11 @@ $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\DSHTray'
 Write-Host '开始卸载 dsh-tray-launcher ...'
 
 # 1) 结束托盘进程
+# 排除自身（卸载脚本路径也含 dsh-tray，否则会把自己杀掉）与任意 uninstall 进程；
+# 用 taskkill /T 连托盘经 cmd 拉起的 harness(node) 一起收，避免留下孤儿服务
 $trayProcs = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
-    Where-Object { $_.CommandLine -match 'dsh-tray' }
-foreach ($p in $trayProcs) { Stop-Process -Id $p.ProcessId -Force }
+    Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match 'dsh-tray' -and $_.CommandLine -notmatch 'uninstall' }
+foreach ($p in $trayProcs) { & "$env:SystemRoot\System32\taskkill.exe" /PID $p.ProcessId /T /F 2>$null | Out-Null }
 
 # 2) 删除桌面快捷方式 + 开机自启副本
 $desktopLnk = Join-Path ([Environment]::GetFolderPath('Desktop')) ($ShortcutName + '.lnk')
