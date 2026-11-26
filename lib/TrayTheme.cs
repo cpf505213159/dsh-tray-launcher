@@ -1,5 +1,6 @@
 // DeepSeek Harness 托盘的主题支持：图标着色 + 菜单渲染器。
 // 由 tray.ps1 与脚本通过 Add-Type -Path 加载（Windows PowerShell 5.1 / .NET Framework）。
+using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -8,6 +9,43 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+
+/// <summary>Windows 深浅主题读取与图标配色。</summary>
+public static class TrayTheme
+{
+    public const string PersonalizeKey = @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+
+    /// <summary>任务栏/开始菜单是否为浅色主题。键缺失或读取失败一律按深色处理。</summary>
+    public static bool IsLightTheme()
+    {
+        return IsLightTheme(PersonalizeKey);
+    }
+
+    /// <summary>从指定子键读取 SystemUsesLightTheme（1=浅色）。</summary>
+    public static bool IsLightTheme(string subKey)
+    {
+        try
+        {
+            using (RegistryKey k = Registry.CurrentUser.OpenSubKey(subKey))
+            {
+                if (k == null) return false;
+                object v = k.GetValue("SystemUsesLightTheme");
+                if (v == null) return false;
+                return Convert.ToInt32(v) == 1;
+            }
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>当前主题下鲸鱼图标应使用的颜色：浅色主题黑鲸鱼，深色主题白鲸鱼。</summary>
+    public static string IconColor(bool light)
+    {
+        return light ? "#000000" : "#FFFFFF";
+    }
+}
 
 /// <summary>读取多尺寸 ICO，按目标色重着色并以 PNG-compressed ICO 输出。</summary>
 public static class TrayIconFactory

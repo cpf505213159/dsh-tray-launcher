@@ -275,6 +275,13 @@ Write-TrayLog ('node: ' + $node)
 Write-TrayLog ('dsh bin: ' + $bin)
 
 # ---- 托盘图标与菜单 ----
+# 加载 C# 辅助类型（图案重着色工厂 / 主题检测）；失败时降级为系统默认图标
+$themeCs = Join-Path $PSScriptRoot 'lib\TrayTheme.cs'
+if (Test-Path $themeCs) {
+    try { Add-Type -Path $themeCs -ReferencedAssemblies @('System.Drawing.dll', 'System.Windows.Forms.dll') }
+    catch { Write-TrayLog ('TrayTheme load failed: ' + $_.Exception.Message) }
+}
+
 $script:PresetIcons = @{
     'liangzu'    = 'icons\liangzu.ico'
     'whale-girl' = 'icons\whale-girl.ico'
@@ -286,36 +293,32 @@ $script:PresetLabels = @{
     'deepseek'   = 'DeepSeek'
 }
 
-function Resolve-IconPath {
-    $v = Get-CfgValue 'icon' ''
-    if ($v) {
-        if ($script:PresetIcons.ContainsKey($v)) {
-            $p = Join-Path $PSScriptRoot $script:PresetIcons[$v]
-            if (Test-Path $p) { return $p }
-        } elseif (Test-Path $v) {
-            return $v
-        }
+# 图标模式：'auto' 跟随 Windows 深浅主题；其余为自定义 .ico 的绝对路径。
+# 未配置、指向旧预设或安装目录内置 icon.ico 时，一律迁移到自动模式。
+$script:iconMode = 'auto'
+$cfgIcon = Get-CfgValue 'icon' ''
+if ($cfgIcon -and $cfgIcon -ne 'auto') {
+    if ($cfgIcon -eq 'liangzu' -or $cfgIcon -eq 'whale-girl' -or $cfgIcon -eq 'deepseek') {
+        $script:iconMode = 'auto'
+    } elseif (Test-Path $cfgIcon) {
+        $isLegacyBuiltin = ((Split-Path $cfgIcon -Leaf) -eq 'icon.ico' -and (Split-Path $cfgIcon -Parent) -eq $script:dataDir)
+        if (-not $isLegacyBuiltin) { $script:iconMode = $cfgIcon }
     }
-    $legacy = Join-Path $PSScriptRoot 'liangzu-icon.ico'
-    if (Test-Path $legacy) { return $legacy }
-    return $null
 }
-
-$script:currentIconKey = 'custom'
-$v = Get-CfgValue 'icon' ''
-if ($v -and $script:PresetIcons.ContainsKey($v)) { $script:currentIconKey = $v }
-elseif ($v -eq '') { $script:currentIconKey = 'liangzu' }  # 未配置时默认梁祖
-
-$iconPath = Resolve-IconPath
-if ($iconPath) {
-    try { $icon = New-Object System.Drawing.Icon($iconPath) } catch { $icon = [System.Drawing.SystemIcons]::Application }
+if ($script:iconMode -eq 'auto') {
+    $script:currentIconKey = 'auto'
+} elseif ($script:PresetIcons.ContainsKey($script:iconMode)) {
+    $script:currentIconKey = $script:iconMode
 } else {
-    $icon = [System.Drawing.SystemIcons]::Application
+    $script:currentIconKey = 'custom'
 }
+
 $tray = New-Object System.Windows.Forms.NotifyIcon
-$tray.Icon = $icon
+$tray.Icon = [System.Drawing.SystemIcons]::Application
 $tray.Text = 'DeepSeek Harness'
 $tray.Visible = $true
+$script:lastTheme = $null
+$script:autoIconPath = $null
 
 # ---- 图标切换：更新托盘 + 配置 + 桌面/自启快捷方式 ----
 function Update-ShortcutIcon($icoPath) {
@@ -385,6 +388,51 @@ function Update-IconMenuChecks {
         $it.Checked = ($it.Tag -eq $script:currentIconKey)
     }
     $script:customMenuItem.Checked = ($script:currentIconKey -eq 'custom')
+}
+
+# ---- 主题跟随：系统切换深浅色后自动重着色托盘图标 ----
+function Test-SystemUsesLightTheme {
+    if ('TrayTheme' -as [type]) {
+        try { return [TrayTheme]::IsLightTheme() } catch { return $false }
+    }
+    return $false
+}
+
+# 按当前主题生成并应用鲸鱼图标。force 为真时即使主题未变也重建。
+function Update-AutoIcon($force) {
+    $light = Test-SystemUsesLightTheme
+    if (-not $force -and $null -ne $script:lastTheme -and $script:lastTheme -eq $light) { return $false }
+    $script:lastTheme = $light
+
+    $src = Join-Path $PSScriptRoot 'icons\deepseek.ico'
+    if (-not (Test-Path $src) -or -not ('TrayIconFactory' -as [type]) -or -not ('TrayTheme' -as [type])) {
+        Write-TrayLog 'auto icon skipped: source or factory unavailable'
+        return $false
+    }
+    $name = if ($light) { 'auto-light.ico' } else { 'auto-dark.ico' }
+    $out = Join-Path $script:dataDir $name
+    if (-not [TrayIconFactory]::Build($src, [TrayTheme]::IconColor($light), $out)) {
+        Write-TrayLog 'auto icon build failed'
+        return $false
+    }
+    try {
+        $tray.Icon = New-Object System.Drawing.Icon($out)
+    } catch {
+        Write-TrayLog ('auto icon apply failed: ' + $_.Exception.Message)
+        return $false
+    }
+    $script:autoIconPath = $out
+    Update-ShortcutIcon $out
+    Write-TrayLog ('auto icon applied: ' + $(if ($light) { 'light' } else { 'dark' }))
+    return $true
+}
+
+# 启动时先落一次图标：自动模式按当前主题生成，自定义模式直接加载
+if ($script:iconMode -eq 'auto') {
+    if (-not (Update-AutoIcon $true)) { $script:lastTheme = $null }
+} else {
+    $initialPath = if ($script:PresetIcons.ContainsKey($script:iconMode)) { Join-Path $PSScriptRoot $script:PresetIcons[$script:iconMode] } else { $script:iconMode }
+    try { $tray.Icon = New-Object System.Drawing.Icon($initialPath) } catch { Write-TrayLog ('icon load failed: ' + $initialPath) }
 }
 
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
@@ -695,6 +743,8 @@ $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 3000
 $timer.add_Tick({
     $script:tick += 1
+    # 主题跟随：每次 tick 比对一次系统深浅色，变化时才重建图标（不重启托盘）
+    if ($script:iconMode -eq 'auto') { Update-AutoIcon $false | Out-Null }
     # 每 20 个 tick（约 1 分钟）回收一次工作集：长跑进程的消息循环 + 轮询会产生
     # 大量短命对象，定期 GC + EmptyWorkingSet 能把常驻读数压回实际在用的量。
     if ($script:tick % 20 -eq 0) { Invoke-MemoryTrim }
