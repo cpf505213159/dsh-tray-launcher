@@ -517,7 +517,8 @@ $miRestart.add_Click({
     $script:harnessUrl = $null
     try {
         Start-HarnessProcess
-        $script:opened = $false   # 端口就绪后重新打开浏览器
+        # 重启不重新打开浏览器：沿用已打开的页面，避免每次重启多出一个标签
+        $script:opened = $true
         $tray.BalloonTipTitle = 'DeepSeek Harness'
         $tray.BalloonTipText = '正在重启…'
         $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
