@@ -129,7 +129,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Autostart
 
 | 操作 | 效果 |
 | --- | --- |
-| `dsh-tray`（或双击桌面快捷方式） | 无窗口启动；托盘出图标 + 气泡；端口就绪自动开浏览器 |
+| `dsh-tray`（或双击桌面快捷方式） | 无窗口启动；托盘出图标 + 右下角提示；端口就绪自动开浏览器 |
 | `dsh-tray --console`（或双击 `launch.bat`） | 控制台模式，前台运行、日志直出终端 |
 | 双击托盘图标 | 打开界面 |
 | 托盘「打开界面」 | 浏览器打开 Web GUI |
