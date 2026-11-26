@@ -133,62 +133,6 @@ public class TrayMenuRenderer : ToolStripRenderer
     }
 }
 
-/// <summary>菜单项图标的种类。</summary>
-public enum TrayGlyph { Open, Log, Restart, Exit, Palette, Power }
-
-/// <summary>用 GDI+ 几何绘制 16x16 单色图标，避免依赖系统字体或外部资源。</summary>
-public static class TrayGlyphs
-{
-    public static Bitmap Get(TrayGlyph kind, Color c)
-    {
-        Bitmap bmp = new Bitmap(16, 16, PixelFormat.Format32bppArgb);
-        using (Graphics g = Graphics.FromImage(bmp))
-        using (Pen pen = new Pen(c, 1.4f))
-        using (SolidBrush brush = new SolidBrush(c))
-        {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            switch (kind)
-            {
-                case TrayGlyph.Open:
-                    g.DrawRectangle(pen, 2f, 3f, 12f, 10f);
-                    g.DrawLine(pen, 2f, 6.5f, 14f, 6.5f);
-                    g.FillEllipse(brush, 3.5f, 4.5f, 1.5f, 1.5f);
-                    break;
-                case TrayGlyph.Log:
-                    g.DrawRectangle(pen, 3.5f, 2f, 9f, 12f);
-                    g.DrawLine(pen, 5.5f, 5f, 10.5f, 5f);
-                    g.DrawLine(pen, 5.5f, 7.5f, 10.5f, 7.5f);
-                    g.DrawLine(pen, 5.5f, 10f, 9f, 10f);
-                    break;
-                case TrayGlyph.Restart:
-                    g.DrawArc(pen, 3f, 3f, 10f, 10f, 30f, 280f);
-                    g.FillPolygon(brush, new PointF[] {
-                        new PointF(11.5f, 1.5f), new PointF(14.5f, 5f), new PointF(9.5f, 5f) });
-                    break;
-                case TrayGlyph.Exit:
-                    g.DrawArc(pen, 3f, 4f, 10f, 10f, -60f, 300f);
-                    g.DrawLine(pen, 8f, 1.5f, 8f, 7.5f);
-                    break;
-                case TrayGlyph.Palette:
-                    g.DrawEllipse(pen, 2f, 2.5f, 12f, 11f);
-                    using (GraphicsPath half = new GraphicsPath())
-                    {
-                        half.AddArc(2.2f, 2.7f, 11.6f, 10.6f, 90f, 180f);
-                        half.CloseFigure();
-                        g.FillPath(brush, half);
-                    }
-                    break;
-                case TrayGlyph.Power:
-                    g.DrawPolygon(pen, new PointF[] {
-                        new PointF(4.5f, 2.5f), new PointF(13f, 8f), new PointF(4.5f, 13.5f) });
-                    break;
-            }
-        }
-        return bmp;
-    }
-}
-
 /// <summary>读取多尺寸 ICO，按目标色重着色并以 PNG-compressed ICO 输出。</summary>
 public static class TrayIconFactory
 {

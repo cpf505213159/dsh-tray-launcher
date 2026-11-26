@@ -177,16 +177,16 @@ if (Test-Path $themeCsSrc) {
     Invoke-WebRequest -Uri $csUrl -OutFile $themeCsDest -UseBasicParsing
 }
 
-# 图标模式：默认 auto 跟随系统主题；-Icon 传入时复制到安装目录并写绝对路径
-$iconSetting = 'auto'
+# 图标模式：默认 brand（DeepSeek 官方蓝鲸鱼）；-Icon 传入时复制到安装目录并写绝对路径
+$iconSetting = 'brand'
 if ($Icon -and (Test-Path $Icon)) {
     $iconCopy = Join-Path $InstallDir 'custom.ico'
     Copy-Item $Icon $iconCopy -Force
     $iconSetting = $iconCopy
 }
 
-# 清理旧版遗留的预设图标（新版本只用 icons\deepseek.ico 作为形状源）
-foreach ($legacy in @('icons\liangzu.ico', 'icons\whale-girl.ico', 'icon.ico')) {
+# 清理旧版遗留的预设图标与主题图标（新版本只用 icons\deepseek.ico 作为形状源）
+foreach ($legacy in @('icons\liangzu.ico', 'icons\whale-girl.ico', 'icon.ico', 'auto-light.ico', 'auto-dark.ico')) {
     $legacyPath = Join-Path $InstallDir $legacy
     if (Test-Path $legacyPath -PathType Leaf) { Remove-Item $legacyPath -Force -ErrorAction SilentlyContinue }
 }
@@ -199,17 +199,15 @@ $lnk = $ws.CreateShortcut($lnkPath)
 $lnk.TargetPath = (Join-Path $env:SystemRoot 'System32\wscript.exe')
 $lnk.Arguments = '"' + $launcherDest + '"'
 $lnk.WorkingDirectory = $InstallDir
-# 快捷方式图标：自动模式按当前主题先生成一份，托盘启动后还会随主题刷新
+# 快捷方式图标：默认生成 DeepSeek 官方品牌蓝鲸鱼
 $shortcutIcon = $null
-if ($iconSetting -eq 'auto') {
+if ($iconSetting -eq 'brand') {
     try {
         Add-Type -AssemblyName System.Drawing
         Add-Type -Path $themeCsDest -ReferencedAssemblies @('System.Drawing.dll', 'System.Windows.Forms.dll')
-        $light = [TrayTheme]::IsLightTheme()
-        $autoName = if ($light) { 'auto-light.ico' } else { 'auto-dark.ico' }
-        $autoIco = Join-Path $InstallDir $autoName
-        if ([TrayIconFactory]::Build((Join-Path $iconDir 'deepseek.ico'), [TrayTheme]::IconColor($light), $autoIco)) {
-            $shortcutIcon = $autoIco
+        $brandIco = Join-Path $InstallDir 'brand.ico'
+        if ([TrayIconFactory]::Build((Join-Path $iconDir 'deepseek.ico'), '#4D6BFE', $brandIco)) {
+            $shortcutIcon = $brandIco
         }
     } catch {}
 } else {

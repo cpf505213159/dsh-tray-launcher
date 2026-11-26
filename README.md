@@ -1,4 +1,4 @@
-# dsh-tray-launcher
+﻿# dsh-tray-launcher
 
 <p align="center">
   <img src="https://img.shields.io/github/stars/fancr-code/dsh-tray-launcher?style=flat-square&cacheSeconds=300" alt="Stars">
@@ -50,14 +50,14 @@ DeepSeek Harness（dsh）默认在终端里前台运行 `dsh web`——必须留
 - 🌐 **就绪自动开浏览器**：后台轮询端口，harness 一监听就自动打开 Web GUI
 - 🔒 **单实例保护**：互斥锁 + 端口检测，重复双击快捷方式不会重复启动，只会唤起界面
 - 🔍 **自动定位 dsh**：配置文件 → npm 全局 → npx 缓存逐级探测，找不到才报错；也可手动指定
-- 🎨 **主题自适应图标**：托盘与桌面快捷方式图标按 Windows 深浅主题自动切换——深色任务栏用白鲸鱼、浅色用黑鲸鱼，切换主题约 3 秒内生效、无需重启托盘；也支持「选择自定义图标…」固定为任意 `.ico`
+- 🎨 **品牌蓝鲸鱼图标**：托盘与桌面快捷方式使用 DeepSeek 官方品牌蓝 `#4D6BFE` 的鲸鱼图标，深色/浅色任务栏都清晰可见；也支持「选择自定义图标…」换成任意 `.ico`
 - 🚀 **可选开机自启**：安装时 `-Autostart` 注册；也可随时在托盘右键「开机自启」一键开关
 - 🧩 **可作 dsh 插件安装**：`dsh plugin add dsh-tray-launcher` 后托盘随 Harness 自动启动/退出，状态文件存 `%DSH_HOME%\dsh-tray`（详见下方「作为 dsh 插件安装」）
 - 🩺 **控制台模式兜底**：`launch.bat` 前台运行、日志直出窗口，排查问题时用
 
 ## 界面预览
 
-桌面快捷方式 → 无窗口启动 → 托盘图标常驻（右键菜单：打开界面 / 打开日志 / 图标 / 开机自启 / 重启 Harness / 退出），harness 就绪自动打开浏览器；菜单与图标配色跟随 Windows 深浅主题。
+桌面快捷方式 → 无窗口启动 → 托盘图标常驻（右键菜单：打开界面 / 打开日志 / 图标 / 开机自启 / 重启 Harness / 退出），harness 就绪自动打开浏览器；右键菜单配色跟随 Windows 深浅主题。
 
 ## 快速开始
 
@@ -114,7 +114,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 | 参数 | 说明 |
 | --- | --- |
 | `-DshPath <路径>` | 手动指定 dsh CLI 入口（`@deepseek-ai/dsh/lib/bin.js`），自动检测失败时使用 |
-| `-Icon <xxx.ico>` | 自定义托盘图标；不传则跟随 Windows 深浅主题自动切换 |
+| `-Icon <xxx.ico>` | 自定义托盘图标；不传则使用 DeepSeek 品牌蓝鲸鱼 |
 | `-ShortcutName <名称>` | 桌面快捷方式名称，默认 `DeepSeek Harness` |
 | `-Autostart` | 同时注册开机自启（复制快捷方式到启动文件夹） |
 | `-Yes` | 跳过安装前的确认提示（自动化场景） |
@@ -136,7 +136,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Icon D:\icons\m
 | 托盘「打开界面」 | 浏览器打开 Web GUI |
 | 托盘「打开日志」 | 记事本打开 stdout 日志 |
 | 托盘「重启 Harness」 | 停止并重新拉起 dsh web（无窗口），就绪后自动重开浏览器 |
-| 托盘「图标」 | 子菜单：「自动适配主题」（勾选 = 跟随深浅色自动切换）/「选择自定义图标…」（固定为任意 `.ico`，托盘与快捷方式图标立即同步） |
+| 托盘「图标」 | 子菜单：「DeepSeek 蓝鲸鱼」（默认，勾选表示当前使用）/「选择自定义图标…」（换成任意 `.ico`，托盘与快捷方式图标立即同步） |
 | 托盘「开机自启」 | 勾选状态 = 是否已注册开机自启；点击即切换（自动创建/删除启动文件夹里的快捷方式，气泡提示结果） |
 | 托盘「退出」 | 停止 harness + 关闭托盘（全部退出） |
 | harness 意外退出 | 气泡提示「已停止」并自动收起托盘 |
@@ -150,7 +150,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Icon D:\icons\m
   "dshBin":   "C:\\...\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js",
   "node":     "C:\\Program Files\\nodejs\\node.exe",
   "url":      "http://127.0.0.1:3080",
-  "icon":     "auto",
+  "icon":     "brand",
   "shortcut": "C:\\Users\\<you>\\Desktop\\DeepSeek Harness.lnk",
   "cwd":      "C:\\Users\\<you>"
 }
@@ -158,7 +158,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Icon D:\icons\m
 
 | 字段 | 说明 |
 | --- | --- |
-| `icon` | 图标：`auto`（默认，跟随 Windows 深浅主题）或自定义 `.ico` 的绝对路径；托盘右键「图标」会写这个字段 |
+| `icon` | 图标：`brand`（默认，DeepSeek 品牌蓝鲸鱼）或自定义 `.ico` 的绝对路径；托盘右键「图标」会写这个字段 |
 | `shortcut` | 桌面快捷方式路径，切图标时用它同步快捷方式图标 |
 
 `dshBin` / `node` 缺省时按「npm 全局 → npx 缓存 → PATH → 常见路径」顺序自动探测。日志写在安装目录 `logs\` 下（`dsh-out.log` / `dsh-err.log` / `dsh-tray.log`）。

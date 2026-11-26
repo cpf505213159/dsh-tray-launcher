@@ -1,7 +1,7 @@
 {
   "name": "dsh-tray-launcher",
   "version": "1.5.2",
-  "description": "DeepSeek Harness 的 Windows 桌面托盘启动器（纯 PowerShell，零安装包、零运行时、实测常驻 55MB）：无窗口运行 dsh web，自动处理新版鉴权地址，图标随 Windows 深浅主题自动变色，托盘右键开机自启、重启 Harness。同时以 dsh 插件形式提供（dsh plugin add 后托盘随 Harness 自动启动）。",
+  "description": "DeepSeek Harness 的 Windows 桌面托盘启动器（纯 PowerShell，零安装包、零运行时、实测常驻 55MB）：无窗口运行 dsh web，自动处理新版鉴权地址，托盘显示 DeepSeek 品牌蓝鲸鱼图标，右键开机自启、重启 Harness。同时以 dsh 插件形式提供（dsh plugin add 后托盘随 Harness 自动启动）。",
   "license": "MIT",
   "author": "fancr-code",
   "type": "module",

@@ -26,14 +26,4 @@ if ($dark.HoverColor.R -ne 0x4D -or $dark.HoverColor.G -ne 0x6B -or $dark.HoverC
     throw ('悬停色错误(dark): ' + $dark.HoverColor)
 }
 
-# 菜单项图标：16x16 且确实画上了像素
-foreach ($kind in @('Open', 'Log', 'Restart', 'Exit', 'Palette', 'Power')) {
-    $bmp = [TrayGlyphs]::Get([TrayGlyph]$kind, [System.Drawing.Color]::White)
-    if ($bmp.Width -ne 16 -or $bmp.Height -ne 16) { throw ($kind + ' 图标尺寸错误: ' + $bmp.Width + 'x' + $bmp.Height) }
-    $painted = 0
-    for ($y = 0; $y -lt 16; $y++) { for ($x = 0; $x -lt 16; $x++) { if ($bmp.GetPixel($x, $y).A -gt 0) { $painted++ } } }
-    if ($painted -lt 8) { throw ($kind + ' 图标几乎没有像素: ' + $painted) }
-    $bmp.Dispose()
-}
-
 Write-Output 'PASS: menu renderer'
