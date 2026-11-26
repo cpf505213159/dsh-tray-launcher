@@ -282,35 +282,13 @@ if (Test-Path $themeCs) {
     catch { Write-TrayLog ('TrayTheme load failed: ' + $_.Exception.Message) }
 }
 
-$script:PresetIcons = @{
-    'liangzu'    = 'icons\liangzu.ico'
-    'whale-girl' = 'icons\whale-girl.ico'
-    'deepseek'   = 'icons\deepseek.ico'
-}
-$script:PresetLabels = @{
-    'liangzu'    = '梁祖'
-    'whale-girl' = '鲸鱼娘'
-    'deepseek'   = 'DeepSeek'
-}
-
 # 图标模式：'auto' 跟随 Windows 深浅主题；其余为自定义 .ico 的绝对路径。
-# 未配置、指向旧预设或安装目录内置 icon.ico 时，一律迁移到自动模式。
+# 旧配置里的预设名、或指向安装目录内置 icon.ico 的值，一律迁移为自动模式。
 $script:iconMode = 'auto'
 $cfgIcon = Get-CfgValue 'icon' ''
-if ($cfgIcon -and $cfgIcon -ne 'auto') {
-    if ($cfgIcon -eq 'liangzu' -or $cfgIcon -eq 'whale-girl' -or $cfgIcon -eq 'deepseek') {
-        $script:iconMode = 'auto'
-    } elseif (Test-Path $cfgIcon) {
-        $isLegacyBuiltin = ((Split-Path $cfgIcon -Leaf) -eq 'icon.ico' -and (Split-Path $cfgIcon -Parent) -eq $script:dataDir)
-        if (-not $isLegacyBuiltin) { $script:iconMode = $cfgIcon }
-    }
-}
-if ($script:iconMode -eq 'auto') {
-    $script:currentIconKey = 'auto'
-} elseif ($script:PresetIcons.ContainsKey($script:iconMode)) {
-    $script:currentIconKey = $script:iconMode
-} else {
-    $script:currentIconKey = 'custom'
+if ($cfgIcon -and $cfgIcon -ne 'auto' -and (Test-Path $cfgIcon)) {
+    $isLegacyBuiltin = ((Split-Path $cfgIcon -Leaf) -eq 'icon.ico' -and (Split-Path $cfgIcon -Parent) -eq $script:dataDir)
+    if (-not $isLegacyBuiltin) { $script:iconMode = $cfgIcon }
 }
 
 $tray = New-Object System.Windows.Forms.NotifyIcon
@@ -359,35 +337,35 @@ function Save-IconConfig($value) {
     Save-CfgValue 'icon' $value
 }
 
-function Apply-Icon($key, $icoPath) {
-    if (-not $icoPath -or -not (Test-Path $icoPath)) {
-        Write-TrayLog ('icon missing: ' + $key)
-        return
+# 切换为自定义图标：复制到数据目录后持久化，之后不会被主题切换覆盖
+function Set-CustomIcon($sourcePath) {
+    if (-not $sourcePath -or -not (Test-Path $sourcePath)) {
+        Write-TrayLog ('icon missing: ' + $sourcePath)
+        return $false
     }
+    $dest = Join-Path $script:dataDir 'custom.ico'
     try {
-        $newIcon = New-Object System.Drawing.Icon($icoPath)
-        $tray.Icon = $newIcon
+        if ((Resolve-Path $sourcePath).Path -ne $dest) { Copy-Item $sourcePath $dest -Force }
+        $tray.Icon = New-Object System.Drawing.Icon($dest)
     } catch {
         Write-TrayLog ('icon load failed: ' + $_.Exception.Message)
-        return
+        return $false
     }
-    $script:currentIconKey = $key
-    Save-IconConfig $key
-    Update-ShortcutIcon $icoPath
+    $script:iconMode = $dest
+    Save-IconConfig $dest
+    Update-ShortcutIcon $dest
     Update-IconMenuChecks
-    $label = if ($script:PresetLabels.ContainsKey($key)) { $script:PresetLabels[$key] } else { '自定义图标' }
-    $tray.BalloonTipTitle = 'DeepSeek Harness'
-    $tray.BalloonTipText = ('已切换图标：' + $label)
-    $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-    $tray.ShowBalloonTip(2000)
-    Write-TrayLog ('icon switched to ' + $key)
+    Write-TrayLog ('custom icon applied: ' + $dest)
+    return $true
 }
 
-function Update-IconMenuChecks {
-    foreach ($it in $script:presetMenuItems.Values) {
-        $it.Checked = ($it.Tag -eq $script:currentIconKey)
-    }
-    $script:customMenuItem.Checked = ($script:currentIconKey -eq 'custom')
+function Set-AutoIconMode {
+    $script:iconMode = 'auto'
+    Save-IconConfig 'auto'
+    $script:lastTheme = $null
+    [void](Update-AutoIcon $true)
+    Update-IconMenuChecks
+    Write-TrayLog 'icon mode: auto (follow system theme)'
 }
 
 # ---- 主题跟随：系统切换深浅色后自动重着色托盘图标 ----
@@ -431,48 +409,77 @@ function Update-AutoIcon($force) {
 if ($script:iconMode -eq 'auto') {
     if (-not (Update-AutoIcon $true)) { $script:lastTheme = $null }
 } else {
-    $initialPath = if ($script:PresetIcons.ContainsKey($script:iconMode)) { Join-Path $PSScriptRoot $script:PresetIcons[$script:iconMode] } else { $script:iconMode }
-    try { $tray.Icon = New-Object System.Drawing.Icon($initialPath) } catch { Write-TrayLog ('icon load failed: ' + $initialPath) }
+    try { $tray.Icon = New-Object System.Drawing.Icon($script:iconMode) }
+    catch { Write-TrayLog ('icon load failed: ' + $script:iconMode) }
 }
 
+# ---- 右键菜单 ----
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
-$miOpen = $menu.Items.Add('打开界面')
-$miLog  = $menu.Items.Add('打开日志')
-$sep    = New-Object System.Windows.Forms.ToolStripSeparator
-$menu.Items.Add($sep) | Out-Null
+$menu.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+$menu.ImageScalingSize = New-Object System.Drawing.Size(16, 16)
+$menu.ShowImageMargin = $true
+$menu.DropShadowEnabled = $true
+$menu.Padding = New-Object System.Windows.Forms.Padding(0, 4, 0, 4)
+$script:menuLight = $null
 
-# 切换图标子菜单（预设 + 自定义）
-$miIcon = New-Object System.Windows.Forms.ToolStripMenuItem('切换图标')
-$script:presetMenuItems = @{}
-foreach ($key in @('liangzu', 'whale-girl', 'deepseek')) {
-    $item = New-Object System.Windows.Forms.ToolStripMenuItem($script:PresetLabels[$key])
-    $item.Tag = $key
-    $item.add_Click({
-        $k = $this.Tag
-        $p = Join-Path $PSScriptRoot $script:PresetIcons[$k]
-        Apply-Icon $k $p
-    })
-    $miIcon.DropDownItems.Add($item) | Out-Null
-    $script:presetMenuItems[$key] = $item
+function Add-TrayMenuItem($target, $text, $glyph, $onClick) {
+    $item = New-Object System.Windows.Forms.ToolStripMenuItem($text)
+    $item.Padding = New-Object System.Windows.Forms.Padding(2, 3, 10, 3)
+    if ($null -ne $glyph) { $item.Tag = $glyph }
+    if ($onClick) { $item.add_Click($onClick) }
+    $target.Items.Add($item) | Out-Null
+    return $item
 }
-$sep2 = New-Object System.Windows.Forms.ToolStripSeparator
-$miIcon.DropDownItems.Add($sep2) | Out-Null
-$script:customMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem('自定义…')
-$script:customMenuItem.add_Click({
+
+# 按当前文字色重绘所有菜单图标（主题切换时调用）
+function Refresh-MenuIcons {
+    if (-not ('TrayGlyphs' -as [type])) { return }
+    $color = [System.Drawing.Color]::White
+    if ($menu.Renderer -and $menu.Renderer.TextColor) { $color = $menu.Renderer.TextColor }
+    $walk = {
+        param($items)
+        foreach ($it in $items) {
+            if ($it.Tag -is [TrayGlyph]) {
+                $old = $it.Image
+                $it.Image = [TrayGlyphs]::Get($it.Tag, $color)
+                if ($old) { try { $old.Dispose() } catch {} }
+            }
+            if ($it.DropDownItems.Count -gt 0) { & $walk $it.DropDownItems }
+        }
+    }
+    & $walk $menu.Items
+}
+
+# 主题变化时重建渲染器与图标颜色（不重启托盘）
+function Update-MenuTheme($force) {
+    $light = Test-SystemUsesLightTheme
+    if (-not $force -and $null -ne $script:menuLight -and $script:menuLight -eq $light) { return }
+    $script:menuLight = $light
+    if ('TrayMenuRenderer' -as [type]) { $menu.Renderer = New-Object TrayMenuRenderer($light) }
+    Refresh-MenuIcons
+}
+
+function Update-IconMenuChecks {
+    if ($script:miAutoIcon) { $script:miAutoIcon.Checked = ($script:iconMode -eq 'auto') }
+    if ($script:miCustomIcon) { $script:miCustomIcon.Checked = ($script:iconMode -ne 'auto') }
+}
+
+$miOpen = Add-TrayMenuItem $menu '打开界面' ([TrayGlyph]::Open) $null
+$miLog  = Add-TrayMenuItem $menu '打开日志' ([TrayGlyph]::Log) $null
+$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
+
+# 图标子菜单：自动适配主题 / 选择自定义
+$script:miIconRoot = Add-TrayMenuItem $menu '图标' ([TrayGlyph]::Palette) $null
+$script:miAutoIcon = Add-TrayMenuItem $script:miIconRoot '自动适配主题' $null { Set-AutoIconMode }
+$script:miAutoIcon.CheckOnClick = $false
+$script:miCustomIcon = Add-TrayMenuItem $script:miIconRoot '选择自定义图标…' $null {
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
     $dlg.Filter = '图标文件 (*.ico)|*.ico|所有文件 (*.*)|*.*'
     $dlg.Title = '选择图标（.ico）'
-    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-        $dest = Join-Path $script:dataDir 'custom.ico'
-        Copy-Item $dlg.FileName $dest -Force
-        Apply-Icon $dest $dest
-        # Apply-Icon 会把 key 设成路径，这里纠正回 'custom' 让菜单正确勾选
-        $script:currentIconKey = 'custom'
-        Update-IconMenuChecks
-    }
-})
-$miIcon.DropDownItems.Add($script:customMenuItem) | Out-Null
-$menu.Items.Add($miIcon) | Out-Null
+    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [void](Set-CustomIcon $dlg.FileName) }
+}
+$script:miCustomIcon.CheckOnClick = $false
+$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 
 # 开机自启（勾选 = 启动文件夹里有快捷方式；点击即切换）
 function Get-ShortcutPath {
@@ -498,8 +505,10 @@ function Ensure-DesktopShortcut {
             $lnk.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + (Join-Path $PSScriptRoot 'tray.ps1') + '"'
         }
         $lnk.WorkingDirectory = $PSScriptRoot
-        $iconFile = Join-Path $PSScriptRoot 'icons\liangzu.ico'
-        if (Test-Path $iconFile) { $lnk.IconLocation = $iconFile + ',0' }
+        # 快捷方式图标跟随当前模式：自动模式用刚生成的着色图标，自定义模式用自定义图标
+        $iconFile = $script:autoIconPath
+        if (-not $iconFile -and $script:iconMode -ne 'auto') { $iconFile = $script:iconMode }
+        if ($iconFile -and (Test-Path $iconFile)) { $lnk.IconLocation = $iconFile + ',0' }
         $lnk.Description = 'DeepSeek Harness 系统托盘启动器'
         $lnk.WindowStyle = 7
         $lnk.Save()
@@ -510,7 +519,7 @@ function Ensure-DesktopShortcut {
         return $null
     }
 }
-$script:miAutostart = New-Object System.Windows.Forms.ToolStripMenuItem('开机自启')
+$script:miAutostart = Add-TrayMenuItem $menu '开机自启' ([TrayGlyph]::Power) $null
 $script:miAutostart.CheckOnClick = $false
 $script:miAutostart.add_Click({
     $shortcutPath = Ensure-DesktopShortcut
@@ -539,7 +548,6 @@ $script:miAutostart.add_Click({
     $tray.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
     $tray.ShowBalloonTip(2500)
 })
-$menu.Items.Add($script:miAutostart) | Out-Null
 # 初始勾选状态：启动文件夹里存在对应快捷方式
 $shortcutForCheck = Get-ShortcutPath
 if ($shortcutForCheck) {
@@ -548,7 +556,7 @@ if ($shortcutForCheck) {
 }
 
 # 托盘菜单：重启 Harness
-$miRestart = $menu.Items.Add('重启 Harness')
+$miRestart = Add-TrayMenuItem $menu '重启 Harness' ([TrayGlyph]::Restart) $null
 $miRestart.add_Click({
     Write-TrayLog 'restart requested'
     if (-not $script:spawned) {
@@ -579,13 +587,10 @@ $miRestart.add_Click({
         $tray.ShowBalloonTip(3000)
     }
 })
-$sepR = New-Object System.Windows.Forms.ToolStripSeparator
-$menu.Items.Add($sepR) | Out-Null
-
-$sep3 = New-Object System.Windows.Forms.ToolStripSeparator
-$menu.Items.Add($sep3) | Out-Null
-$miExit = $menu.Items.Add('退出')
+$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
+$miExit = Add-TrayMenuItem $menu '退出' ([TrayGlyph]::Exit) $null
 $tray.ContextMenuStrip = $menu
+Update-MenuTheme $true
 Update-IconMenuChecks
 
 function Open-HarnessUI {
@@ -745,6 +750,7 @@ $timer.add_Tick({
     $script:tick += 1
     # 主题跟随：每次 tick 比对一次系统深浅色，变化时才重建图标（不重启托盘）
     if ($script:iconMode -eq 'auto') { Update-AutoIcon $false | Out-Null }
+    Update-MenuTheme $false
     # 每 20 个 tick（约 1 分钟）回收一次工作集：长跑进程的消息循环 + 轮询会产生
     # 大量短命对象，定期 GC + EmptyWorkingSet 能把常驻读数压回实际在用的量。
     if ($script:tick % 20 -eq 0) { Invoke-MemoryTrim }

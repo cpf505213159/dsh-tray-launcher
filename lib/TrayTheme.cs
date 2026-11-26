@@ -47,6 +47,148 @@ public static class TrayTheme
     }
 }
 
+/// <summary>右键菜单绘制：深/浅两套配色，悬停用品牌蓝填充圆角块。</summary>
+public class TrayMenuRenderer : ToolStripRenderer
+{
+    public Color BackColor { get; private set; }
+    public Color TextColor { get; private set; }
+    public Color HoverColor { get; private set; }
+    public Color SeparatorColor { get; private set; }
+    public Color BorderColor { get; private set; }
+
+    public TrayMenuRenderer(bool light)
+    {
+        HoverColor = Color.FromArgb(0x4D, 0x6B, 0xFE);
+        if (light)
+        {
+            BackColor = Color.FromArgb(250, 250, 250);
+            TextColor = Color.FromArgb(32, 32, 32);
+            SeparatorColor = Color.FromArgb(226, 226, 226);
+            BorderColor = Color.FromArgb(214, 214, 214);
+        }
+        else
+        {
+            BackColor = Color.FromArgb(32, 32, 32);
+            TextColor = Color.FromArgb(240, 240, 240);
+            SeparatorColor = Color.FromArgb(66, 66, 66);
+            BorderColor = Color.FromArgb(56, 56, 56);
+        }
+    }
+
+    protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
+    {
+        using (SolidBrush b = new SolidBrush(BackColor))
+            e.Graphics.FillRectangle(b, e.AffectedBounds);
+    }
+
+    protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
+    {
+        using (Pen p = new Pen(BorderColor))
+            e.Graphics.DrawRectangle(p, 0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1);
+    }
+
+    protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+    {
+        if (!e.Item.Selected || !e.Item.Enabled) return;
+        Rectangle r = new Rectangle(2, 1, e.Item.Width - 4, e.Item.Height - 2);
+        using (GraphicsPath path = RoundedRect(r, 6))
+        using (SolidBrush b = new SolidBrush(HoverColor))
+            e.Graphics.FillPath(b, path);
+    }
+
+    protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+    {
+        if (!e.Item.Enabled)
+            e.TextColor = Color.FromArgb(128, TextColor);
+        else if (e.Item.Selected)
+            e.TextColor = Color.White;
+        else
+            e.TextColor = TextColor;
+        base.OnRenderItemText(e);
+    }
+
+    protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
+    {
+        int y = e.Item.Height / 2;
+        using (Pen p = new Pen(SeparatorColor))
+            e.Graphics.DrawLine(p, 10, y, e.Item.Width - 10, y);
+    }
+
+    protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
+    {
+        e.ArrowColor = e.Item.Selected ? Color.White : TextColor;
+        base.OnRenderArrow(e);
+    }
+
+    private static GraphicsPath RoundedRect(Rectangle r, int radius)
+    {
+        int d = radius * 2;
+        GraphicsPath path = new GraphicsPath();
+        path.AddArc(r.X, r.Y, d, d, 180, 90);
+        path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+}
+
+/// <summary>菜单项图标的种类。</summary>
+public enum TrayGlyph { Open, Log, Restart, Exit, Palette, Power }
+
+/// <summary>用 GDI+ 几何绘制 16x16 单色图标，避免依赖系统字体或外部资源。</summary>
+public static class TrayGlyphs
+{
+    public static Bitmap Get(TrayGlyph kind, Color c)
+    {
+        Bitmap bmp = new Bitmap(16, 16, PixelFormat.Format32bppArgb);
+        using (Graphics g = Graphics.FromImage(bmp))
+        using (Pen pen = new Pen(c, 1.4f))
+        using (SolidBrush brush = new SolidBrush(c))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            switch (kind)
+            {
+                case TrayGlyph.Open:
+                    g.DrawRectangle(pen, 2f, 3f, 12f, 10f);
+                    g.DrawLine(pen, 2f, 6.5f, 14f, 6.5f);
+                    g.FillEllipse(brush, 3.5f, 4.5f, 1.5f, 1.5f);
+                    break;
+                case TrayGlyph.Log:
+                    g.DrawRectangle(pen, 3.5f, 2f, 9f, 12f);
+                    g.DrawLine(pen, 5.5f, 5f, 10.5f, 5f);
+                    g.DrawLine(pen, 5.5f, 7.5f, 10.5f, 7.5f);
+                    g.DrawLine(pen, 5.5f, 10f, 9f, 10f);
+                    break;
+                case TrayGlyph.Restart:
+                    g.DrawArc(pen, 3f, 3f, 10f, 10f, 30f, 280f);
+                    g.FillPolygon(brush, new PointF[] {
+                        new PointF(11.5f, 1.5f), new PointF(14.5f, 5f), new PointF(9.5f, 5f) });
+                    break;
+                case TrayGlyph.Exit:
+                    g.DrawArc(pen, 3f, 4f, 10f, 10f, -60f, 300f);
+                    g.DrawLine(pen, 8f, 1.5f, 8f, 7.5f);
+                    break;
+                case TrayGlyph.Palette:
+                    g.DrawEllipse(pen, 2f, 2.5f, 12f, 11f);
+                    using (GraphicsPath half = new GraphicsPath())
+                    {
+                        half.AddArc(2.2f, 2.7f, 11.6f, 10.6f, 90f, 180f);
+                        half.CloseFigure();
+                        g.FillPath(brush, half);
+                    }
+                    break;
+                case TrayGlyph.Power:
+                    g.DrawPolygon(pen, new PointF[] {
+                        new PointF(4.5f, 2.5f), new PointF(13f, 8f), new PointF(4.5f, 13.5f) });
+                    break;
+            }
+        }
+        return bmp;
+    }
+}
+
 /// <summary>读取多尺寸 ICO，按目标色重着色并以 PNG-compressed ICO 输出。</summary>
 public static class TrayIconFactory
 {
