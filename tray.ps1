@@ -623,7 +623,8 @@ function Start-HarnessProcess {
         if ($u.Port -gt 0) { $portArg = ' --port ' + $u.Port }
         if ($u.Host) { $hostArg = ' --host ' + $u.Host }
     } catch {}
-    $cmdLine = '/c ""' + $node + '" "' + $bin + '" web' + $portArg + $hostArg + ' >> "' + $outLog + '" 2>> "' + $errLog + '" "'
+    # --no-open：dsh web 自己也会打开默认浏览器，若不禁用会与托盘的就绪打开叠加成两个页面
+    $cmdLine = '/c ""' + $node + '" "' + $bin + '" web --no-open' + $portArg + $hostArg + ' >> "' + $outLog + '" 2>> "' + $errLog + '" "'
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $env:ComSpec
     $psi.Arguments = $cmdLine
@@ -697,8 +698,8 @@ $timer.add_Tick({
     # 大量短命对象，定期 GC + EmptyWorkingSet 能把常驻读数压回实际在用的量。
     if ($script:tick % 20 -eq 0) { Invoke-MemoryTrim }
 
-    # 就绪判定：优先用日志里带 token 的地址(及其端口)判端口，再打开该地址；
-    # 拿不到 token（旧版 harness）则等约 15s 后按配置端口兜底开裸地址。
+    # 就绪判定：优先用日志里带 token 的地址(及其端口)判端口，再打开该地址。
+    # 新版 dsh 启动 MCP 后打印 token 可能需要 15s 以上，兜底必须晚于它，否则会开成裸地址（401）。
     if (-not $NoOpen -and -not $script:opened -and -not $script:externalNoToken) {
         $logUrl = Get-LogHarnessUrl
         $target = $null
@@ -706,7 +707,7 @@ $timer.add_Tick({
             $p = 3080
             try { $p = ([uri]$logUrl).Port } catch {}
             if (Test-PortOpen $p) { $target = $logUrl }
-        } elseif ($script:tick -ge 5 -and (Test-PortOpen (Get-HarnessPort))) {
+        } elseif ($script:tick -ge 30 -and (Test-PortOpen (Get-HarnessPort))) {
             $target = Get-HarnessUrl
         }
         if ($target) {
