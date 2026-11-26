@@ -134,14 +134,13 @@ if ($ConsoleMode) {
 
 # ---- 托盘模式 ----
 $script:TrayVersion = '1.5.0'
-$script:isNpmInstall = $false
 try {
     $pk = Join-Path $PSScriptRoot 'package.json'
     if (Test-Path $pk) {
         # 显式 UTF8：PowerShell 5.1 的 Get-Content 对无 BOM 的 UTF-8 按 ANSI(GBK) 解码，
         # package.json 含中文时 JSON 会解析失败，版本号随之回退默认值而误报“有新版本”
         $pv = (Get-Content $pk -Raw -Encoding UTF8 | ConvertFrom-Json).version
-        if ($pv) { $script:TrayVersion = $pv; $script:isNpmInstall = $true }
+        if ($pv) { $script:TrayVersion = $pv }
     } else {
         # 本地/仓库安装（无 package.json）：读安装器写入的 VERSION，避免回退默认值导致误报“有新版本”
         $vf = Join-Path $PSScriptRoot 'VERSION'
@@ -227,6 +226,8 @@ function Rotate-Log($path, [long]$maxBytes = 10485760) {
 # 日志里取最后一次打印的带 token 地址；取不到（旧版 harness）再退回配置里的 url。
 $script:harnessUrl = $null
 $script:outLogStart = 0
+# 本次托盘进程的启动时刻：用来判断日志里的地址是不是本次运行写下的（旧 token 早已失效）
+$script:trayStartTime = Get-Date
 # 每次都从日志实时取（不缓存），用于"就绪判定 + 取带 token 地址"：
 # 避免端口先通、日志后写的竞态导致首开裸地址 401；重启后也能拿到新 token。
 function Get-LogHarnessUrl {
@@ -266,7 +267,12 @@ $createdNew = $null
 $mutex = New-Object System.Threading.Mutex($true, 'Local\dsh-tray-launcher', [ref]$createdNew)
 if (-not $createdNew) {
     Write-TrayLog 'another tray instance is running; opening UI and exiting'
-    if (-not $NoOpen) { Start-Process (Get-HarnessUrl) }
+    # 只打开日志里带 token 的地址；裸地址会 401，宁可不开
+    if (-not $NoOpen) {
+        $existingUrl = Get-LogHarnessUrl
+        if ($existingUrl) { Start-Process $existingUrl }
+        else { Write-TrayLog 'no token URL available; skip opening UI (bare URL would 401)' }
+    }
     exit 0
 }
 Write-TrayLog 'tray launcher started'
@@ -602,7 +608,13 @@ $script:externalNoToken = $false
 $already = Test-PortOpen (Get-HarnessPort)
 if ($already) {
     $attachUrl = Get-LogHarnessUrl
-    if ($attachUrl) {
+    # 日志里的 token 只在写它的那次运行里有效。只有日志在本次托盘启动后还被写过，
+    # 才能确定这条地址属于正在监听的那个 harness；否则一律当作外部 harness。
+    $freshLog = $false
+    try {
+        if ((Test-Path $outLog) -and ((Get-Item $outLog).LastWriteTime -ge $script:trayStartTime)) { $freshLog = $true }
+    } catch {}
+    if ($attachUrl -and $freshLog) {
         $script:harnessUrl = $attachUrl
         Write-TrayLog ('harness already listening on port ' + (Get-HarnessPort) + '; tray attached')
         Show-Toast '已在运行'
@@ -610,8 +622,8 @@ if ($already) {
         # 外部已有 harness 在监听，但拿不到它进程内存里的 ?token=，裸地址会 401。
         # 标记 externalNoToken：不自动开浏览器，提示用户用原窗口打印的带 token 地址。
         $script:externalNoToken = $true
-        Write-TrayLog ('port ' + (Get-HarnessPort) + ' already in use but no token URL in log (external harness?); attached without owning it')
-        Show-Toast '检测到 Harness 已在运行，但无法自动获取访问令牌。请在其原窗口打开 dsh 打印的带 ?token= 的地址（或右击托盘「重启 Harness」由本托盘接管）。' 6000
+        Write-TrayLog ('port ' + (Get-HarnessPort) + ' already in use but no fresh token URL (external harness?); attached without owning it')
+        Show-Toast '检测到 Harness 已在运行，但无法自动获取访问令牌。请在其原窗口打开 dsh 打印的带 ?token= 的地址。' 6000
     }
 } else {
     if (-not $bin) {
@@ -638,7 +650,7 @@ $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 3000
 $timer.add_Tick({
     $script:tick += 1
-    # 主题跟随：每次 tick 比对一次系统深浅色，变化时才重建图标（不重启托盘）
+    # 主题跟随：每次 tick 比对一次系统深浅色，变化时重建菜单配色（不重启托盘）
     Update-MenuTheme $false
     # 每 20 个 tick（约 1 分钟）回收一次工作集：长跑进程的消息循环 + 轮询会产生
     # 大量短命对象，定期 GC + EmptyWorkingSet 能把常驻读数压回实际在用的量。
@@ -660,7 +672,10 @@ $timer.add_Tick({
             $script:opened = $true
             $script:harnessUrl = $target
             Start-Process $target
-            Write-TrayLog ('browser opened: ' + $target)
+            # 地址里带 ?token=，属敏感值：日志只记 scheme://host:port
+            $shown = $target
+            try { $tu = [uri]$target; $shown = $tu.Scheme + '://' + $tu.Host + ':' + $tu.Port } catch {}
+            Write-TrayLog ('browser opened: ' + $shown)
         }
     }
 

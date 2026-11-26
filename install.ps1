@@ -78,7 +78,6 @@ if (-not $nodePath -and $cmdNode) { $nodePath = $cmdNode.Source }
 if ($cmdNode -and $cmdNode.Source -match 'codex' -and $nodePath -ne $cmdNode.Source) {
     Write-Output "注意: 检测到工具链 node ($($cmdNode.Source))，已改用系统 node ($nodePath) 以避免黑窗。"
 }
-if (-not $nodePath -and (Test-Path 'C:\Program Files\nodejs\node.exe')) { $nodePath = 'C:\Program Files\nodejs\node.exe' }
 
 Write-Output "dsh bin : $dshBin"
 Write-Output "node    : $nodePath"
@@ -89,14 +88,19 @@ Write-Output "autostart: $Autostart"
 
 if (-not $nodePath) { Write-Error '未找到 node.exe，请先安装 Node.js。' ; exit 1 }
 if (-not $dshBin) {
-    Write-Host ''
-    Write-Host '未能自动找到 dsh CLI。' -ForegroundColor Yellow
-    Write-Host '  方式一：重新运行并指定路径：'
-    Write-Host '    dsh-tray-install -DshPath "<路径>\node_modules\@deepseek-ai\dsh\lib\bin.js"'
-    Write-Host '  方式二：现在直接粘贴完整路径并回车（跳过则回车）：'
-    $manual = Read-Host '  bin.js 路径'
-    if ($manual -and (Test-Path $manual)) { $dshBin = $manual }
-    if (-not $dshBin) { Write-Error '未找到 dsh CLI，安装中止。' ; exit 1 }
+    if ($DryRun) {
+        # DryRun 面向自动化：不阻塞等待输入，只报告检测结果
+        Write-Output 'DryRun: 未找到 dsh CLI（正式安装会提示手动指定 -DshPath）。'
+    } else {
+        Write-Host ''
+        Write-Host '未能自动找到 dsh CLI。' -ForegroundColor Yellow
+        Write-Host '  方式一：重新运行并指定路径：'
+        Write-Host '    dsh-tray-install -DshPath "<路径>\node_modules\@deepseek-ai\dsh\lib\bin.js"'
+        Write-Host '  方式二：现在直接粘贴完整路径并回车（跳过则回车）：'
+        $manual = Read-Host '  bin.js 路径'
+        if ($manual -and (Test-Path $manual)) { $dshBin = $manual }
+        if (-not $dshBin) { Write-Error '未找到 dsh CLI，安装中止。' ; exit 1 }
+    }
 }
 
 if ($DryRun) { Write-Output 'DryRun: 检测完成，未写入任何文件。'; exit 0 }

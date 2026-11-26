@@ -267,26 +267,6 @@ public static class TrayIconFactory
         }
     }
 
-    /// <summary>直接返回着色后的 Icon（内部经临时文件加载）；失败返回 null。</summary>
-    public static Icon MakeIcon(string sourceIco, string rgbHex)
-    {
-        string tmp = Path.Combine(Path.GetTempPath(), "dsh-tray-" + Guid.NewGuid().ToString("N") + ".ico");
-        try
-        {
-            if (!Build(sourceIco, rgbHex, tmp)) return null;
-            Icon icon = new Icon(tmp);
-            return icon;
-        }
-        catch
-        {
-            return null;
-        }
-        finally
-        {
-            try { File.Delete(tmp); } catch { }
-        }
-    }
-
     private static Color ParseColor(string hex)
     {
         if (hex == null) throw new ArgumentNullException("hex");

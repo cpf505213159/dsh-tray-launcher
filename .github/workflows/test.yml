@@ -48,3 +48,11 @@ jobs:
             }
           }
           if ($bad) { exit 1 }
+      # 图标工厂 / 主题读取 / 菜单渲染的单元测试（轻提示窗测试需要交互桌面，不放在 CI）
+      - name: Helper type tests (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/test-icon-factory.ps1
+          ./scripts/test-theme-icon.ps1
+          ./scripts/test-menu-renderer.ps1

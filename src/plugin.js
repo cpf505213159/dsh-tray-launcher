@@ -13,7 +13,7 @@
  * shortcut, `dsh-tray-install` and this plugin can never double-spawn.
  *
  * When started from here, the launcher's own state (dsh-tray.config.json,
- * logs, custom icon) is kept under `%DSH_HOME%\dsh-tray` instead of the npm
+ * logs, generated icon) is kept under `%DSH_HOME%\dsh-tray` instead of the npm
  * package directory, so plugin updates never wipe it.
  */
 import { spawn } from "node:child_process";
