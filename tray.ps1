@@ -459,9 +459,24 @@ function Update-MenuTheme($force) {
     Refresh-MenuIcons
 }
 
+# 勾选状态用文本后缀表示：ToolStripMenuItem 一旦设了 Image，Checked 的勾号会被图标挤掉
+function Update-AutostartText {
+    if ($script:miAutostart) {
+        $script:miAutostart.Text = if ($script:miAutostart.Checked) { '开机自启 ✓' } else { '开机自启' }
+    }
+}
+
 function Update-IconMenuChecks {
-    if ($script:miAutoIcon) { $script:miAutoIcon.Checked = ($script:iconMode -eq 'auto') }
-    if ($script:miCustomIcon) { $script:miCustomIcon.Checked = ($script:iconMode -ne 'auto') }
+    if ($script:miAutoIcon) {
+        $isAuto = ($script:iconMode -eq 'auto')
+        $script:miAutoIcon.Checked = $isAuto
+        $script:miAutoIcon.Text = if ($isAuto) { '自动适配主题 ✓' } else { '自动适配主题' }
+    }
+    if ($script:miCustomIcon) {
+        $isCustom = ($script:iconMode -ne 'auto')
+        $script:miCustomIcon.Checked = $isCustom
+        $script:miCustomIcon.Text = if ($isCustom) { '选择自定义图标… ✓' } else { '选择自定义图标…' }
+    }
 }
 
 $miOpen = Add-TrayMenuItem $menu '打开界面' ([TrayGlyph]::Open) $null
@@ -535,12 +550,14 @@ $script:miAutostart.add_Click({
     if (Test-Path $startupPath) {
         Remove-Item $startupPath -Force
         $script:miAutostart.Checked = $false
+        Update-AutostartText
         $tray.BalloonTipTitle = 'DeepSeek Harness'
         $tray.BalloonTipText = '已关闭开机自启'
         Write-TrayLog 'autostart disabled'
     } else {
         Copy-Item $shortcutPath $startupPath -Force
         $script:miAutostart.Checked = $true
+        Update-AutostartText
         $tray.BalloonTipTitle = 'DeepSeek Harness'
         $tray.BalloonTipText = '已开启开机自启'
         Write-TrayLog 'autostart enabled'
@@ -554,6 +571,7 @@ if ($shortcutForCheck) {
     $startupCheck = Join-Path ([Environment]::GetFolderPath('Startup')) ([System.IO.Path]::GetFileName($shortcutForCheck))
     $script:miAutostart.Checked = (Test-Path $startupCheck)
 }
+Update-AutostartText
 
 # 托盘菜单：重启 Harness
 $miRestart = Add-TrayMenuItem $menu '重启 Harness' ([TrayGlyph]::Restart) $null

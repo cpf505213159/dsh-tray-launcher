@@ -185,6 +185,12 @@ if ($Icon -and (Test-Path $Icon)) {
     $iconSetting = $iconCopy
 }
 
+# 清理旧版遗留的预设图标（新版本只用 icons\deepseek.ico 作为形状源）
+foreach ($legacy in @('icons\liangzu.ico', 'icons\whale-girl.ico', 'icon.ico')) {
+    $legacyPath = Join-Path $InstallDir $legacy
+    if (Test-Path $legacyPath -PathType Leaf) { Remove-Item $legacyPath -Force -ErrorAction SilentlyContinue }
+}
+
 # 桌面快捷方式
 $ws = New-Object -ComObject WScript.Shell
 $desktop = [Environment]::GetFolderPath('Desktop')
