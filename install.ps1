@@ -1,10 +1,12 @@
 ﻿# dsh-tray-launcher 一键安装器
-# 用法（克隆仓库后）:
+# 用法（克隆或解压仓库后）:
+#   双击 安装.bat（最简单），或运行:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 # 参数:
-#   -DshPath <path>    手动指定 dsh CLI 入口（@deepseek-ai/dsh/lib/bin.js）
+#   -DshPath <path>    手动指定 dsh 入口（支持 bin.js、dsh.cmd 或所在目录），自动检测失败时使用
 #   -ShortcutName <名> 桌面快捷方式名称（默认 DeepSeek Harness）
 #   -Autostart         同时注册开机自启
+#   -Launch            安装完成后立即启动托盘（安装.bat 默认启用）
 #   -Yes               跳过安装前确认提示（自动化场景）
 #   -DryRun            只检测与打印，不写入任何文件
 #   -Cwd <dir>         harness 的工作目录（默认 %USERPROFILE%）
@@ -13,6 +15,7 @@ param(
     [string]$ShortcutName = "DeepSeek Harness",
     [string]$Cwd = "",
     [switch]$Autostart,
+    [switch]$Launch,
     [switch]$Yes,
     [switch]$DryRun
 )
@@ -24,42 +27,119 @@ $RepoName  = 'dsh-tray-launcher'
 $Branch    = 'main'
 $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\DSHTray'
 
-function Resolve-DshBin {
-    $cleanDshPath = if ($DshPath) { $DshPath.Trim().Trim('"').Trim("'") } else { '' }
-    if ($cleanDshPath -and (Test-Path $cleanDshPath)) { return $cleanDshPath }
-    $candidates = @()
-    # 1) dsh 命令在 PATH 上：从 .bin shim 反推真实 bin.js
-    $cmd = Get-Command dsh -ErrorAction SilentlyContinue
-    if ($cmd) {
-        $binDir = Split-Path $cmd.Source -Parent
-        # 全局安装时 $binDir 是 npm 前缀（如 %APPDATA%\npm），包体在其 node_modules 下
-        $candidates += (Join-Path $binDir 'node_modules\@deepseek-ai\dsh\lib\bin.js')
-    }
-    # 2) 当前 npm 的缓存目录（权威来源，兼容自定义/重定向的缓存路径）
+function Resolve-DshFromShim([string]$shimPath) {
+    if (-not $shimPath -or -not (Test-Path $shimPath -PathType Leaf)) { return $null }
+    $binDir = Split-Path $shimPath -Parent
+    # 快路径：标准 npm / nvm / fnm 全局目录结构
+    $direct = Join-Path $binDir 'node_modules\@deepseek-ai\dsh\lib\bin.js'
+    if (Test-Path $direct -PathType Leaf) { return (Resolve-Path $direct).Path }
+
+    # 解析 shim 内容（覆盖 pnpm / yarn / npm / 自定义前缀）
     try {
-        $cache = & npm config get cache 2>$null
+        $content = Get-Content $shimPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if (-not $content) { return $null }
+        $ms = [regex]::Matches($content, '(?i)([^\s"''`]+@deepseek-ai[\\/]+dsh[\\/]+lib[\\/]+bin\.js)')
+        foreach ($m in $ms) {
+            $raw = $m.Groups[1].Value
+            $prefix = $binDir.TrimEnd('\').Replace('$', '$$') + '\'
+            $expanded = $raw -replace '(?i)(%~?dp0%?[\\/]?|\$basedir[\\/]?|\$\{basedir\}[\\/]?)', $prefix
+            $expanded = [Environment]::ExpandEnvironmentVariables($expanded)
+            $expanded = $expanded -replace '/', '\'
+            try {
+                if (-not [System.IO.Path]::IsPathRooted($expanded)) { $expanded = Join-Path $binDir $expanded }
+                $full = [System.IO.Path]::GetFullPath($expanded)
+                if (Test-Path $full -PathType Leaf) { return $full }
+            } catch {}
+        }
+    } catch {}
+    return $null
+}
+
+function Resolve-DshFromPath([string]$candidate) {
+    if (-not $candidate) { return $null }
+    $p = $candidate.Trim().Trim('"').Trim("'")
+    if (-not $p -or -not (Test-Path $p)) { return $null }
+    if ((Test-Path $p -PathType Leaf) -and $p -match '(?i)bin\.js$') { return (Resolve-Path $p).Path }
+    if (Test-Path $p -PathType Container) {
+        foreach ($rel in @('lib\bin.js', 'node_modules\@deepseek-ai\dsh\lib\bin.js', '@deepseek-ai\dsh\lib\bin.js')) {
+            $try = Join-Path $p $rel
+            if (Test-Path $try -PathType Leaf) { return (Resolve-Path $try).Path }
+        }
+        foreach ($shimName in @('dsh.cmd', 'dsh.ps1', 'dsh')) {
+            $r = Resolve-DshFromShim (Join-Path $p $shimName)
+            if ($r) { return $r }
+        }
+        return $null
+    }
+    return (Resolve-DshFromShim $p)
+}
+
+function Resolve-DshBin {
+    $manual = Resolve-DshFromPath $DshPath
+    if ($manual) { return $manual }
+    $candidates = @()
+
+    # 1) PATH 上的所有 dsh 命令（通过 shim 反推真实 bin.js：兼容 npm / pnpm / yarn / nvm / fnm）
+    $cmds = @(Get-Command dsh -All -ErrorAction SilentlyContinue)
+    foreach ($cmd in $cmds) {
+        if ($cmd.Source) {
+            $resolved = Resolve-DshFromShim $cmd.Source
+            if ($resolved) { return $resolved }
+        }
+    }
+
+    # 2) 包管理器全局根目录（npm / pnpm / yarn）
+    try {
+        $g = (& npm root -g 2>$null | Select-Object -First 1)
+        if ($g) { $candidates += (Join-Path $g.Trim() '@deepseek-ai\dsh\lib\bin.js') }
+    } catch {}
+    try {
+        if (Get-Command pnpm -ErrorAction SilentlyContinue) {
+            $pg = (& pnpm root -g 2>$null | Select-Object -First 1)
+            if ($pg) { $candidates += (Join-Path $pg.Trim() '@deepseek-ai\dsh\lib\bin.js') }
+        }
+    } catch {}
+    try {
+        if (Get-Command yarn -ErrorAction SilentlyContinue) {
+            $yg = (& yarn global dir 2>$null | Select-Object -First 1)
+            if ($yg) { $candidates += (Join-Path $yg.Trim() 'node_modules\@deepseek-ai\dsh\lib\bin.js') }
+        }
+    } catch {}
+
+    # 3) 当前 npm 的 npx 缓存（按修改时间倒序，优先最新缓存）
+    try {
+        $cache = (& npm config get cache 2>$null | Select-Object -First 1)
         if ($cache) {
-            $npxDir = Join-Path $cache '_npx'
+            $npxDir = Join-Path $cache.Trim() '_npx'
             if (Test-Path $npxDir) {
                 $candidates += Get-ChildItem $npxDir -Directory -ErrorAction SilentlyContinue |
+                    Sort-Object LastWriteTime -Descending |
                     ForEach-Object { Join-Path $_.FullName 'node_modules\@deepseek-ai\dsh\lib\bin.js' }
             }
         }
     } catch {}
-    # 3) npm 全局安装
-    try {
-        $g = & npm root -g 2>$null
-        if ($g) { $candidates += (Join-Path $g '@deepseek-ai\dsh\lib\bin.js') }
-    } catch {}
-    # 4) 常见兜底位置
+
+    # 4) 各包管理器常见默认路径兜底（npm / pnpm / yarn / bun / volta / npx）
     $candidates += (Join-Path $env:APPDATA 'npm\node_modules\@deepseek-ai\dsh\lib\bin.js')
+    $pnpmGlobal = Join-Path $env:LOCALAPPDATA 'pnpm\global'
+    if (Test-Path $pnpmGlobal) {
+        $candidates += Get-ChildItem $pnpmGlobal -Directory -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            ForEach-Object { Join-Path $_.FullName 'node_modules\@deepseek-ai\dsh\lib\bin.js' }
+    }
+    $candidates += (Join-Path $env:LOCALAPPDATA 'Yarn\Data\global\node_modules\@deepseek-ai\dsh\lib\bin.js')
+    $candidates += (Join-Path $env:USERPROFILE '.bun\install\global\node_modules\@deepseek-ai\dsh\lib\bin.js')
+    $candidates += (Join-Path $env:LOCALAPPDATA 'Volta\tools\image\packages\@deepseek-ai\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js')
+    $candidates += (Join-Path $env:LOCALAPPDATA 'Volta\tools\image\packages\@deepseek-ai\dsh\lib\bin.js')
     $localNpx = Join-Path $env:LOCALAPPDATA 'npm-cache\_npx'
     if (Test-Path $localNpx) {
         $candidates += Get-ChildItem $localNpx -Directory -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
             ForEach-Object { Join-Path $_.FullName 'node_modules\@deepseek-ai\dsh\lib\bin.js' }
     }
+
     foreach ($c in $candidates) {
-        if ($c -and (Test-Path $c)) { return $c }
+        if ($c -and (Test-Path $c -PathType Leaf)) { return (Resolve-Path $c).Path }
     }
     return $null
 }
@@ -87,20 +167,33 @@ Write-Output "shortcut: $(Join-Path ([Environment]::GetFolderPath('Desktop')) ($
 Write-Output ("cwd     : " + $(if ($Cwd -and (Test-Path $Cwd)) { $Cwd } else { $env:USERPROFILE }))
 Write-Output "autostart: $Autostart"
 
-if (-not $nodePath) { Write-Error '未找到 node.exe，请先安装 Node.js。' ; exit 1 }
+if (-not $nodePath) {
+    Write-Host ''
+    Write-Host '未找到 Node.js (node.exe)。' -ForegroundColor Red
+    Write-Host '请先安装 Node.js（推荐 LTS 版本，下载地址: https://nodejs.org/ ），安装完成后重新双击「安装.bat」。'
+    exit 1
+}
 if (-not $dshBin) {
     if ($DryRun) {
         # DryRun 面向自动化：不阻塞等待输入，只报告检测结果
-        Write-Output 'DryRun: 未找到 dsh CLI（正式安装会提示手动指定 -DshPath）。'
+        Write-Output 'DryRun: 未找到 dsh CLI（正式安装会提示自动安装或手动指定路径）。'
     } else {
         Write-Host ''
-        Write-Host '未能自动找到 dsh CLI。' -ForegroundColor Yellow
-        Write-Host '  方式一：重新运行并指定路径：'
-        Write-Host '    dsh-tray-install -DshPath "<路径>\node_modules\@deepseek-ai\dsh\lib\bin.js"'
-        Write-Host '  方式二：现在直接粘贴完整路径并回车（跳过则回车）：'
-        $manual = Read-Host '  bin.js 路径'
-        if ($manual) { $manual = $manual.Trim().Trim('"').Trim("'") }
-        if ($manual -and (Test-Path $manual)) { $dshBin = $manual }
+        Write-Host '未能自动找到你电脑上的 DeepSeek Harness (dsh)。' -ForegroundColor Yellow
+        $hasNpm = [bool](Get-Command npm -ErrorAction SilentlyContinue)
+        if ($hasNpm) {
+            Write-Host '  直接输入 1 并回车 ：自动执行 npm install -g @deepseek-ai/dsh 安装 dsh 并继续'
+        }
+        Write-Host '  或者直接拖入/粘贴 ：bin.js / dsh.cmd 文件（或 dsh 所在目录）路径后回车'
+        Write-Host '  直接回车          ：取消安装'
+        $manual = Read-Host '请选择或粘贴路径'
+        if ($hasNpm -and $manual -and $manual.Trim() -eq '1') {
+            Write-Host '正在通过 npm 安装 @deepseek-ai/dsh ...' -ForegroundColor Cyan
+            & npm install -g @deepseek-ai/dsh
+            $dshBin = Resolve-DshBin
+        } elseif ($manual) {
+            $dshBin = Resolve-DshFromPath $manual
+        }
         if (-not $dshBin) { Write-Error '未找到 dsh CLI，安装中止。' ; exit 1 }
     }
 }
@@ -122,6 +215,20 @@ if (-not $Yes) {
 }
 
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+
+# 若已装过旧版本且托盘仍在运行，先停止旧托盘以便覆盖更新并立即生效
+try {
+    $oldProcs = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.ProcessId -ne $PID -and
+            $_.CommandLine -match '(?i)DSHTray[\\/]+tray\.ps1'
+        }
+    if ($oldProcs) {
+        Write-Output '检测到旧版托盘正在运行，先停止旧进程再更新...'
+        foreach ($p in $oldProcs) { & "$env:SystemRoot\System32\taskkill.exe" /PID $p.ProcessId /T /F 2>$null | Out-Null }
+        Start-Sleep -Milliseconds 400
+    }
+} catch {}
 
 # tray.ps1：优先用同目录副本（克隆安装），否则从 GitHub 下载（远程一行命令安装）
 $remoteMode = -not (Test-Path (Join-Path $PSScriptRoot 'tray.ps1'))
@@ -187,6 +294,11 @@ foreach ($legacy in @('icons\liangzu.ico', 'icons\whale-girl.ico', 'icon.ico', '
     if (Test-Path $legacyPath -PathType Leaf) { Remove-Item $legacyPath -Force -ErrorAction SilentlyContinue }
 }
 
+# 解除从 GitHub 下载 ZIP 带来的 Mark-of-the-Web 标记，避免双击快捷方式时弹 Windows 安全警告
+foreach ($unblockTarget in @((Join-Path $InstallDir 'tray.ps1'), $launcherDest, (Join-Path $iconDir 'deepseek.ico'), $themeCsDest)) {
+    try { if (Test-Path $unblockTarget) { Unblock-File -Path $unblockTarget -ErrorAction SilentlyContinue } } catch {}
+}
+
 # 桌面快捷方式
 $ws = New-Object -ComObject WScript.Shell
 $desktop = [Environment]::GetFolderPath('Desktop')
@@ -243,6 +355,15 @@ if ($Autostart) {
 }
 
 Write-Output ''
-Write-Output '安装完成。双击桌面快捷方式启动（无窗口，托盘图标）。'
+Write-Output '安装完成。双击桌面快捷方式即可无窗口启动（托盘图标常驻）。'
 Write-Output ("安装目录: " + $InstallDir)
 Write-Output ("日志目录: " + (Join-Path $InstallDir 'logs'))
+
+if ($Launch) {
+    Write-Output '正在自动启动托盘，就绪后将自动打开浏览器...'
+    try {
+        Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\wscript.exe') -ArgumentList ('"' + $launcherDest + '"') -WorkingDirectory $InstallDir
+    } catch {
+        Write-Warning ('自动启动失败，请手动双击桌面快捷方式: ' + $_.Exception.Message)
+    }
+}

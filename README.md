@@ -49,7 +49,7 @@ DeepSeek Harness（dsh）默认在终端里前台运行 `dsh web`——必须留
 - 👆 **托盘菜单**：打开界面 / 打开日志 / 开机自启 / 重启 Harness / 退出（= 停止 harness + 关托盘）；双击图标 = 打开界面
 - 🌐 **就绪自动开浏览器**：后台轮询端口，harness 一监听就自动打开 Web GUI
 - 🔒 **单实例保护**：互斥锁 + 端口检测，重复双击快捷方式不会重复启动，只会唤起界面
-- 🔍 **自动定位 dsh**：配置文件 → npm 全局 → npx 缓存逐级探测，找不到才报错；也可手动指定
+- 🔍 **自动定位 dsh**：支持 npm / pnpm / yarn / bun / volta / nvm / fnm / npx 缓存自动探测，无需手动配置路径；未找到时支持一键安装或直接拖入路径
 - 🎨 **品牌蓝鲸鱼图标**：托盘与桌面快捷方式使用 DeepSeek 官方品牌蓝 `#4D6BFE` 的鲸鱼图标，深色/浅色任务栏都清晰可见
 - 🚀 **可选开机自启**：安装时 `-Autostart` 注册；也可随时在托盘右键「开机自启」一键开关
 - 🧩 **可作 dsh 插件安装**：`dsh plugin add dsh-tray-launcher` 后托盘随 Harness 自动启动/退出，状态文件存 `%DSH_HOME%\dsh-tray`（详见下方「作为 dsh 插件安装」）
@@ -67,14 +67,19 @@ DeepSeek Harness（dsh）默认在终端里前台运行 `dsh web`——必须留
 - Windows PowerShell 5.1（系统自带，无需安装）
 - 已安装 DeepSeek Harness CLI（`dsh web` 可正常启动）与 Node.js（dsh 自身要求 ≥ 22，安装本工具需要 ≥ 18）
 
-### 双击安装（推荐，零命令）
+### 双击一键安装（最推荐，零命令、全自动）
 
-1. 打开 <https://github.com/cpf505213159/dsh-tray-launcher>，点绿色 **Code → Download ZIP**，解压到任意位置
+只要电脑上已经装了 `dsh`（不管是用 npm、pnpm、yarn、bun、npx 还是 nvm 装的）：
+
+1. 打开 <https://github.com/cpf505213159/dsh-tray-launcher>，点绿色 **Code → Download ZIP**，**右键解压**到任意文件夹
 2. 双击解压目录里的 **`安装.bat`**
-3. 看到 `[OK] Installation finished.` 后按任意键关闭窗口；桌面会多出「DeepSeek Harness」快捷方式
-4. 以后双击这个快捷方式即可启动（无窗口，图标出现在托盘）
+3. 等待几秒看到 `[完成] 安装成功，已自动启动托盘！` 即可关闭窗口——桌面已生成「DeepSeek Harness」快捷方式，且托盘与浏览器会自动打开
+4. 以后每次使用，直接双击桌面上的「DeepSeek Harness」即可（右键托盘图标可一键开启「开机自启」）
 
-> 只拿到 `安装.bat` 这一个文件也没关系：双击它，会自动从 GitHub 下载安装器并完成安装（需要能上网）。
+> - 解压后安装**完全离线**，不依赖访问 GitHub；自动解除 ZIP 安全标记，双击快捷方式不会弹 Windows 安全警告。
+> - 升级重装时同样直接双击 `安装.bat`，会自动停止旧托盘、保留已有自定义配置并启动新版。
+> - 如果电脑上还没装 `dsh`，安装器会提示输入 `1` 自动执行 `npm install -g @deepseek-ai/dsh`，或直接把 `dsh.cmd` / `bin.js` 拖进窗口。
+> - 只拿到 `安装.bat` 这一个文件也没关系：双击它会自动从 GitHub 下载安装器完成安装（需能访问 GitHub）。
 
 ### npm 全局安装（备选，版本可能落后于 GitHub）
 
@@ -124,9 +129,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 
 | 参数 | 说明 |
 | --- | --- |
-| `-DshPath <路径>` | 手动指定 dsh CLI 入口（`@deepseek-ai/dsh/lib/bin.js`），自动检测失败时使用 |
+| `-DshPath <路径>` | 手动指定 dsh 入口（支持 `bin.js`、`dsh.cmd` 或所在目录），自动检测失败时使用 |
 | `-ShortcutName <名称>` | 桌面快捷方式名称，默认 `DeepSeek Harness` |
 | `-Autostart` | 同时注册开机自启（复制快捷方式到启动文件夹） |
+| `-Launch` | 安装完成后立即启动托盘（`安装.bat` 默认开启） |
 | `-Yes` | 跳过安装前的确认提示（自动化场景） |
 | `-DryRun` | 只检测和打印，不写入任何文件 |
 

@@ -57,16 +57,42 @@ if (-not $node -or -not (Test-Path $node)) {
 }
 
 # ---- 定位 dsh CLI（lib/bin.js）----
+function Resolve-DshFromShim([string]$shimPath) {
+    if (-not $shimPath -or -not (Test-Path $shimPath -PathType Leaf)) { return $null }
+    $binDir = Split-Path $shimPath -Parent
+    $direct = Join-Path $binDir 'node_modules\@deepseek-ai\dsh\lib\bin.js'
+    if (Test-Path $direct -PathType Leaf) { return (Resolve-Path $direct).Path }
+    try {
+        $content = Get-Content $shimPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if (-not $content) { return $null }
+        $ms = [regex]::Matches($content, '(?i)([^\s"''`]+@deepseek-ai[\\/]+dsh[\\/]+lib[\\/]+bin\.js)')
+        foreach ($m in $ms) {
+            $raw = $m.Groups[1].Value
+            $prefix = $binDir.TrimEnd('\').Replace('$', '$$') + '\'
+            $expanded = $raw -replace '(?i)(%~?dp0%?[\\/]?|\$basedir[\\/]?|\$\{basedir\}[\\/]?)', $prefix
+            $expanded = [Environment]::ExpandEnvironmentVariables($expanded)
+            $expanded = $expanded -replace '/', '\'
+            try {
+                if (-not [System.IO.Path]::IsPathRooted($expanded)) { $expanded = Join-Path $binDir $expanded }
+                $full = [System.IO.Path]::GetFullPath($expanded)
+                if (Test-Path $full -PathType Leaf) { return $full }
+            } catch {}
+        }
+    } catch {}
+    return $null
+}
+
 function Find-DshBin {
     $manual = Get-CfgValue 'dshBin' ''
     if ($manual -and (Test-Path $manual)) { return $manual }
     $candidates = @()
-    # 1) dsh 命令在 PATH 上：从 .bin shim 反推真实 bin.js
-    $cmd = Get-Command dsh -ErrorAction SilentlyContinue
-    if ($cmd) {
-        $binDir = Split-Path $cmd.Source -Parent
-        # .bin/shim 所在目录本身就是 npm 全局前缀，包体在 node_modules 下
-        $candidates += (Join-Path $binDir 'node_modules\@deepseek-ai\dsh\lib\bin.js')
+    # 1) dsh 命令在 PATH 上：解析 shim（兼容 npm / pnpm / yarn / nvm / fnm，绝不执行外部命令）
+    $cmds = @(Get-Command dsh -All -ErrorAction SilentlyContinue)
+    foreach ($cmd in $cmds) {
+        if ($cmd.Source) {
+            $resolved = Resolve-DshFromShim $cmd.Source
+            if ($resolved) { return $resolved }
+        }
     }
     # 2) 当前 npm 的缓存目录（纯 PowerShell 探测，绝不执行外部命令：
     #    无控制台进程执行外部命令会触发 PowerShell 分配可见控制台=黑窗）
@@ -86,6 +112,7 @@ function Find-DshBin {
         $npxDir = Join-Path $cache '_npx'
         if (Test-Path $npxDir) {
             $candidates += Get-ChildItem $npxDir -Directory -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending |
                 ForEach-Object { Join-Path $_.FullName 'node_modules\@deepseek-ai\dsh\lib\bin.js' }
         }
     }
@@ -105,14 +132,19 @@ function Find-DshBin {
     foreach ($g in $globalRoots) {
         if ($g) { $candidates += (Join-Path $g 'node_modules\@deepseek-ai\dsh\lib\bin.js') }
     }
-    # 4) 常见兜底位置
-    $localNpx = Join-Path $env:LOCALAPPDATA 'npm-cache\_npx'
-    if (Test-Path $localNpx) {
-        $candidates += Get-ChildItem $localNpx -Directory -ErrorAction SilentlyContinue |
+    # 4) 其它包管理器常见全局位置（pnpm / yarn / bun / volta）
+    $pnpmGlobal = Join-Path $env:LOCALAPPDATA 'pnpm\global'
+    if (Test-Path $pnpmGlobal) {
+        $candidates += Get-ChildItem $pnpmGlobal -Directory -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
             ForEach-Object { Join-Path $_.FullName 'node_modules\@deepseek-ai\dsh\lib\bin.js' }
     }
+    $candidates += (Join-Path $env:LOCALAPPDATA 'Yarn\Data\global\node_modules\@deepseek-ai\dsh\lib\bin.js')
+    $candidates += (Join-Path $env:USERPROFILE '.bun\install\global\node_modules\@deepseek-ai\dsh\lib\bin.js')
+    $candidates += (Join-Path $env:LOCALAPPDATA 'Volta\tools\image\packages\@deepseek-ai\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js')
+    $candidates += (Join-Path $env:LOCALAPPDATA 'Volta\tools\image\packages\@deepseek-ai\dsh\lib\bin.js')
     foreach ($c in $candidates) {
-        if ($c -and (Test-Path $c)) { return $c }
+        if ($c -and (Test-Path $c -PathType Leaf)) { return $c }
     }
     return $null
 }
@@ -134,7 +166,7 @@ if ($ConsoleMode) {
 # bin。只有真正要"拉起" harness 的分支才要求 bin（见下方启动分支）。
 
 # ---- 托盘模式 ----
-$script:TrayVersion = '1.5.5'
+$script:TrayVersion = '1.5.6'
 try {
     $pk = Join-Path $PSScriptRoot 'package.json'
     if (Test-Path $pk) {
