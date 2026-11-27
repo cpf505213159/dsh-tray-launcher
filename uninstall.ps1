@@ -1,6 +1,6 @@
 ﻿# dsh-tray-launcher 一键卸载
 # 用法: powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1
-# 远程: powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/fancr-code/dsh-tray-launcher/main/uninstall.ps1 | iex"
+# 远程: powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/cpf505213159/dsh-tray-launcher/main/uninstall.ps1 | iex"
 param(
     [string]$ShortcutName = "DeepSeek Harness"
 )

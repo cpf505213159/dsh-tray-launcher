@@ -1,6 +1,6 @@
 {
   "name": "dsh-tray-launcher",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "DeepSeek Harness 的 Windows 桌面托盘启动器（纯 PowerShell，零安装包、零运行时、实测常驻 55MB）：无窗口运行 dsh web，自动处理新版鉴权地址，托盘显示 DeepSeek 品牌蓝鲸鱼图标，右键开机自启、重启 Harness。同时以 dsh 插件形式提供（dsh plugin add 后托盘随 Harness 自动启动）。",
   "license": "MIT",
   "author": "fancr-code",
@@ -25,6 +25,8 @@
     "launch-hidden.vbs",
     "install.ps1",
     "uninstall.ps1",
+    "安装.bat",
+    "卸载.bat",
     "launch.bat",
     "lib/TrayTheme.cs",
     "icons/deepseek.ico",
@@ -37,7 +39,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fancr-code/dsh-tray-launcher.git"
+    "url": "git+https://github.com/cpf505213159/dsh-tray-launcher.git"
   },
   "keywords": [
     "deepseek-harness",

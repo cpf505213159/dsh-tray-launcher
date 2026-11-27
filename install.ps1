@@ -19,7 +19,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$RepoOwner = 'fancr-code'
+$RepoOwner = 'cpf505213159'
 $RepoName  = 'dsh-tray-launcher'
 $Branch    = 'main'
 $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\DSHTray'

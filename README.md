@@ -1,20 +1,20 @@
 ﻿# dsh-tray-launcher
 
 <p align="center">
-  <img src="https://img.shields.io/github/stars/fancr-code/dsh-tray-launcher?style=flat-square&cacheSeconds=300" alt="Stars">
+  <img src="https://img.shields.io/github/stars/cpf505213159/dsh-tray-launcher?style=flat-square&cacheSeconds=300" alt="Stars">
   &nbsp;
   <img src="https://img.shields.io/npm/v/dsh-tray-launcher?style=flat-square" alt="npm">
   &nbsp;
   <img src="https://img.shields.io/npm/dm/dsh-tray-launcher?style=flat-square" alt="Downloads">
   &nbsp;
-  <img src="https://img.shields.io/github/license/fancr-code/dsh-tray-launcher?style=flat-square" alt="License">
+  <img src="https://img.shields.io/github/license/cpf505213159/dsh-tray-launcher?style=flat-square" alt="License">
   &nbsp;
-  <img src="https://img.shields.io/github/last-commit/fancr-code/dsh-tray-launcher?style=flat-square" alt="Last Commit">
+  <img src="https://img.shields.io/github/last-commit/cpf505213159/dsh-tray-launcher?style=flat-square" alt="Last Commit">
 </p>
 
 <p align="center">
   <strong>DeepSeek Harness 的 Windows 桌面托盘启动器</strong><br>
-  <em>双击快捷方式无窗口启动 dsh web · 系统托盘常驻 · 退出即全退 · 一行命令安装</em>
+  <em>双击快捷方式无窗口启动 dsh web · 系统托盘常驻 · 退出即全退 · 双击安装包即装</em>
 </p>
 
 <div align="center">
@@ -67,12 +67,23 @@ DeepSeek Harness（dsh）默认在终端里前台运行 `dsh web`——必须留
 - Windows PowerShell 5.1（系统自带，无需安装）
 - 已安装 DeepSeek Harness CLI（`dsh web` 可正常启动）与 Node.js（dsh 自身要求 ≥ 22，安装本工具需要 ≥ 18）
 
-### npm 全局安装（推荐）
+### 双击安装（推荐，零命令）
+
+1. 打开 <https://github.com/cpf505213159/dsh-tray-launcher>，点绿色 **Code → Download ZIP**，解压到任意位置
+2. 双击解压目录里的 **`安装.bat`**
+3. 看到 `Finished.` 后按任意键关闭窗口；桌面会多出「DeepSeek Harness」快捷方式
+4. 以后双击这个快捷方式即可启动（无窗口，图标出现在托盘）
+
+> 只拿到 `安装.bat` 这一个文件也没关系：双击它，会自动从 GitHub 下载安装器并完成安装（需要能上网）。
+
+### npm 全局安装（备选，版本可能落后于 GitHub）
 
 ```powershell
 npm install -g dsh-tray-launcher
 dsh-tray-install
 ```
+
+npm 上发布的是较早版本，想要本仓库的最新修复请用上面的双击安装或从仓库安装。
 
 安装器会自动检测 dsh 与 node 位置，**安装前会列出将执行的操作并询问确认**（回车 = 继续，输入 n 取消）；找不到 dsh 时会提示你粘贴 `bin.js` 路径，也可用 `dsh-tray-install -DshPath "<bin.js 路径>"` 手动指定。自动化场景用 `-Yes` 跳过确认。
 
@@ -96,7 +107,7 @@ dsh plugin --profile web add dsh-tray-launcher
 ### 一行命令远程安装
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/fancr-code/dsh-tray-launcher/main/install.ps1' -OutFile $env:TEMP\dshtray-install.ps1; & $env:TEMP\dshtray-install.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/cpf505213159/dsh-tray-launcher/main/install.ps1' -OutFile $env:TEMP\dshtray-install.ps1; & $env:TEMP\dshtray-install.ps1"
 ```
 
 安装器自动检测 dsh 与 node 位置，**安装前会列出将执行的操作并询问确认**（回车 = 继续，输入 n 取消）；找不到 dsh 时会提示你粘贴 `bin.js` 路径，也可用 `dsh-tray-install -DshPath "<bin.js 路径>"` 手动指定。自动化场景用 `-Yes` 跳过确认。
@@ -104,7 +115,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubu
 ### 从仓库安装
 
 ```powershell
-git clone https://github.com/fancr-code/dsh-tray-launcher.git
+git clone https://github.com/cpf505213159/dsh-tray-launcher.git
 cd dsh-tray-launcher
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 ```
@@ -161,7 +172,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Autostart
 
 ## 卸载
 
-**一键卸载**（本地脚本或远程执行）：
+**双击卸载（推荐）**：双击仓库目录里的 **`卸载.bat`**，按任意键关闭即可。
+
+**命令行卸载**（本地脚本或远程执行）：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1
@@ -170,7 +183,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1
 远程执行（未安装本仓库时）：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/fancr-code/dsh-tray-launcher/main/uninstall.ps1' -OutFile $env:TEMP\dshtray-uninstall.ps1; & $env:TEMP\dshtray-uninstall.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/cpf505213159/dsh-tray-launcher/main/uninstall.ps1' -OutFile $env:TEMP\dshtray-uninstall.ps1; & $env:TEMP\dshtray-uninstall.ps1"
 ```
 
 会自动：结束托盘进程 → 删除桌面快捷方式（含开机自启副本）→ 删除安装目录 `%LOCALAPPDATA%\Programs\DSHTray\`。
