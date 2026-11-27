@@ -160,6 +160,9 @@ if ($cmdNode -and $cmdNode.Source -match 'codex' -and $nodePath -ne $cmdNode.Sou
     Write-Output "注意: 检测到工具链 node ($($cmdNode.Source))，已改用系统 node ($nodePath) 以避免黑窗。"
 }
 
+Write-Output '=================================================='
+Write-Output '  DeepSeek Harness 桌面托盘启动器 - 一键安装'
+Write-Output '=================================================='
 Write-Output "dsh bin : $dshBin"
 Write-Output "node    : $nodePath"
 Write-Output "install : $InstallDir"
@@ -355,7 +358,8 @@ if ($Autostart) {
 }
 
 Write-Output ''
-Write-Output '安装完成。双击桌面快捷方式即可无窗口启动（托盘图标常驻）。'
+Write-Output '[完成] 安装成功！桌面已生成「DeepSeek Harness」快捷方式，以后双击它即可无窗口启动。'
+Write-Output '       （若看不到托盘图标，点任务栏右下角 ^ 展开即可找到蓝色鲸鱼图标）'
 Write-Output ("安装目录: " + $InstallDir)
 Write-Output ("日志目录: " + (Join-Path $InstallDir 'logs'))
 

@@ -166,7 +166,7 @@ if ($ConsoleMode) {
 # bin。只有真正要"拉起" harness 的分支才要求 bin（见下方启动分支）。
 
 # ---- 托盘模式 ----
-$script:TrayVersion = '1.5.6'
+$script:TrayVersion = '1.5.7'
 try {
     $pk = Join-Path $PSScriptRoot 'package.json'
     if (Test-Path $pk) {

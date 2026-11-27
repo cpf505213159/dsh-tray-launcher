@@ -1,7 +1,5 @@
 @echo off
-chcp 65001 >nul
-rem dsh-tray-launcher 控制台模式：前台运行 dsh web，日志直接显示在本窗口。
+rem dsh-tray-launcher console mode: run dsh web in foreground with logs printed here.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tray.ps1" -ConsoleMode
 echo.
-echo Harness 已停止，按任意键关闭本窗口。
-pause >nul
+pause

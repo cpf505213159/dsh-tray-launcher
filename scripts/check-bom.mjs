@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const scripts = ["tray.ps1", "install.ps1", "uninstall.ps1"];
+const batFiles = ["安装.bat", "卸载.bat", "launch.bat"];
 let failed = 0;
 
 console.log("PowerShell 脚本编码检查（必须带 UTF-8 BOM，兼容 PowerShell 5.1）");
@@ -25,6 +26,26 @@ for (const name of scripts) {
   const hasParam = /^param\(/m.test(text) || /^#/.test(text);
   const ok = hasBom && hasParam;
   console.log(`  ${ok ? "✓" : "✗"} ${name}：${hasBom ? "有 BOM" : "缺 BOM（PowerShell 5.1 会乱码并解析失败）"}${hasParam ? "" : " · 缺少 param/注释头"}`);
+  if (!ok) failed += 1;
+}
+
+console.log("\nWindows 批处理编码检查（必须纯 ASCII + CRLF，避免 cmd.exe 多字节跳转错位）");
+for (const name of batFiles) {
+  let buf;
+  try {
+    buf = readFileSync(fileURLToPath(new URL(`../${name}`, import.meta.url)));
+  } catch (error) {
+    console.log(`  ✗ ${name} 读取失败：${error.message}`);
+    failed += 1;
+    continue;
+  }
+  const hasNonAscii = buf.some((b) => b > 0x7f);
+  const text = buf.toString("ascii");
+  const hasBareLf = /(^|[^\r])\n/.test(text);
+  const ok = !hasNonAscii && !hasBareLf;
+  console.log(
+    `  ${ok ? "✓" : "✗"} ${name}：${hasNonAscii ? "含非 ASCII 字节（cmd.exe 会解析错位）" : "纯 ASCII"}${hasBareLf ? " · 含裸 LF（应为 CRLF）" : " · CRLF"}`,
+  );
   if (!ok) failed += 1;
 }
 

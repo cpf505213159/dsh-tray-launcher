@@ -8,6 +8,9 @@ param(
 $ErrorActionPreference = 'SilentlyContinue'
 $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\DSHTray'
 
+Write-Host '=================================================='
+Write-Host '  DeepSeek Harness 桌面托盘启动器 - 一键卸载'
+Write-Host '=================================================='
 Write-Host '开始卸载 dsh-tray-launcher ...'
 
 # 0) 读取配置里记录的自定义快捷方式路径（若有），确保非默认 -ShortcutName 也能删干净
