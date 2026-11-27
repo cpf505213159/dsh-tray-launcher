@@ -27,7 +27,7 @@
 
 DeepSeek Harness（dsh）默认在终端里前台运行 `dsh web`——必须留着一个 cmd/PowerShell 窗口，误关窗口服务就没了。本工具把它变成**一个标准的 Windows 托盘应用**：双击桌面快捷方式，无任何窗口弹出，托盘出现图标，harness 就绪后自动打开浏览器；托盘菜单管理界面与日志，「退出」即完整停止（先停 harness、再关托盘，不留后台残留）。
 
-> 这不是 dsh 的 cordis 插件，而是 dsh 在 Windows 上的启动/常驻工具：不改 dsh 源码，不接管 dsh 的升级与多 profile 能力，卸载即还原。
+> 默认作为 dsh 在 Windows 上的独立桌面托盘启动/常驻工具运行（不改 dsh 源码，不接管 dsh 的升级与多 profile 能力，卸载即还原）；同时包内也附带可选的 Cordis 插件入口（`src/plugin.js`），便于通过 `dsh plugin add` 让托盘随 Harness 自动挂载。
 
 | | 终端直跑 `dsh web` | 本工具（托盘） |
 | --- | --- | --- |
@@ -71,7 +71,7 @@ DeepSeek Harness（dsh）默认在终端里前台运行 `dsh web`——必须留
 
 1. 打开 <https://github.com/cpf505213159/dsh-tray-launcher>，点绿色 **Code → Download ZIP**，解压到任意位置
 2. 双击解压目录里的 **`安装.bat`**
-3. 看到 `Finished.` 后按任意键关闭窗口；桌面会多出「DeepSeek Harness」快捷方式
+3. 看到 `[OK] Installation finished.` 后按任意键关闭窗口；桌面会多出「DeepSeek Harness」快捷方式
 4. 以后双击这个快捷方式即可启动（无窗口，图标出现在托盘）
 
 > 只拿到 `安装.bat` 这一个文件也没关系：双击它，会自动从 GitHub 下载安装器并完成安装（需要能上网）。
@@ -107,7 +107,7 @@ dsh plugin --profile web add dsh-tray-launcher
 ### 一行命令远程安装
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/cpf505213159/dsh-tray-launcher/main/install.ps1' -OutFile $env:TEMP\dshtray-install.ps1; & $env:TEMP\dshtray-install.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $f=Join-Path $env:TEMP 'dshtray-install.ps1'; irm 'https://raw.githubusercontent.com/cpf505213159/dsh-tray-launcher/main/install.ps1' -OutFile $f; & $f"
 ```
 
 安装器自动检测 dsh 与 node 位置，**安装前会列出将执行的操作并询问确认**（回车 = 继续，输入 n 取消）；找不到 dsh 时会提示你粘贴 `bin.js` 路径，也可用 `dsh-tray-install -DshPath "<bin.js 路径>"` 手动指定。自动化场景用 `-Yes` 跳过确认。
@@ -183,7 +183,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1
 远程执行（未安装本仓库时）：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/cpf505213159/dsh-tray-launcher/main/uninstall.ps1' -OutFile $env:TEMP\dshtray-uninstall.ps1; & $env:TEMP\dshtray-uninstall.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $f=Join-Path $env:TEMP 'dshtray-uninstall.ps1'; irm 'https://raw.githubusercontent.com/cpf505213159/dsh-tray-launcher/main/uninstall.ps1' -OutFile $f; & $f"
 ```
 
 会自动：结束托盘进程 → 删除桌面快捷方式（含开机自启副本）→ 删除安装目录 `%LOCALAPPDATA%\Programs\DSHTray\`。

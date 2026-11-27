@@ -33,8 +33,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Parse PowerShell scripts for syntax errors
-        shell: pwsh
+      - name: Parse PowerShell scripts for syntax errors (Windows PowerShell 5.1)
+        shell: powershell
         run: |
           $bad = 0
           foreach ($f in @('tray.ps1', 'install.ps1', 'uninstall.ps1')) {

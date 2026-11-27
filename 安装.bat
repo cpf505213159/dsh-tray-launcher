@@ -11,7 +11,9 @@ goto done
 
 :remote
 echo Installer not found next to this file, downloading from GitHub ...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/cpf505213159/dsh-tray-launcher/main/install.ps1' -OutFile $env:TEMP\dshtray-install.ps1; & $env:TEMP\dshtray-install.ps1 -Yes"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; irm 'https://raw.githubusercontent.com/cpf505213159/dsh-tray-launcher/main/install.ps1' -OutFile (Join-Path $env:TEMP 'dshtray-install.ps1')"
+if errorlevel 1 goto failed
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\dshtray-install.ps1" -Yes %*
 if errorlevel 1 goto failed
 
 :done

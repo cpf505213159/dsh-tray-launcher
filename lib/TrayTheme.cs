@@ -130,7 +130,10 @@ public class TrayMenuRenderer : ToolStripRenderer
 /// <summary>托盘操作反馈用的轻提示窗：不依赖系统通知（Win11 下未注册的进程气泡常不显示）。</summary>
 public class TrayToast : Form
 {
+    private static TrayToast current;
     private System.Windows.Forms.Timer closeTimer;
+    private Font labelFont;
+    private Region roundedRegion;
 
     protected override bool ShowWithoutActivation { get { return true; } }
 
@@ -158,7 +161,8 @@ public class TrayToast : Form
         Label label = new Label();
         label.AutoSize = true;
         label.Text = text;
-        label.Font = new Font("Microsoft YaHei UI", 9f);
+        labelFont = new Font("Microsoft YaHei UI", 9f);
+        label.Font = labelFont;
         label.ForeColor = light ? Color.FromArgb(32, 32, 32) : Color.FromArgb(240, 240, 240);
         label.BackColor = Color.Transparent;
         Controls.Add(label);
@@ -175,7 +179,8 @@ public class TrayToast : Form
             path.AddArc(Width - r * 2 - 1, Height - r * 2 - 1, r * 2, r * 2, 0, 90);
             path.AddArc(0, Height - r * 2 - 1, r * 2, r * 2, 90, 90);
             path.CloseFigure();
-            Region = new Region(path);
+            roundedRegion = new Region(path);
+            Region = roundedRegion;
         }
         Rectangle wa = Screen.PrimaryScreen.WorkingArea;
         Location = new Point(wa.Right - Width - 14, wa.Bottom - Height - 14);
@@ -183,14 +188,23 @@ public class TrayToast : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        if (current == this) { current = null; }
         if (closeTimer != null) { closeTimer.Dispose(); closeTimer = null; }
+        if (roundedRegion != null) { Region = null; roundedRegion.Dispose(); roundedRegion = null; }
+        if (labelFont != null) { labelFont.Dispose(); labelFont = null; }
         base.OnFormClosed(e);
     }
 
-    /// <summary>在屏幕右下角显示一条提示，ms 毫秒后自动关闭。</summary>
+    /// <summary>在屏幕右下角显示一条提示，ms 毫秒后自动关闭（连续弹出时自动替换旧提示）。</summary>
     public static void Popup(string text, bool light, int ms)
     {
+        if (current != null && !current.IsDisposed)
+        {
+            try { current.Close(); } catch { }
+            current = null;
+        }
         TrayToast t = new TrayToast(text, light);
+        current = t;
         t.Show();
         System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
         timer.Interval = Math.Max(200, ms);

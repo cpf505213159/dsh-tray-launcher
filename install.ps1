@@ -25,7 +25,8 @@ $Branch    = 'main'
 $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\DSHTray'
 
 function Resolve-DshBin {
-    if ($DshPath -and (Test-Path $DshPath)) { return $DshPath }
+    $cleanDshPath = if ($DshPath) { $DshPath.Trim().Trim('"').Trim("'") } else { '' }
+    if ($cleanDshPath -and (Test-Path $cleanDshPath)) { return $cleanDshPath }
     $candidates = @()
     # 1) dsh 命令在 PATH 上：从 .bin shim 反推真实 bin.js
     $cmd = Get-Command dsh -ErrorAction SilentlyContinue
@@ -98,6 +99,7 @@ if (-not $dshBin) {
         Write-Host '    dsh-tray-install -DshPath "<路径>\node_modules\@deepseek-ai\dsh\lib\bin.js"'
         Write-Host '  方式二：现在直接粘贴完整路径并回车（跳过则回车）：'
         $manual = Read-Host '  bin.js 路径'
+        if ($manual) { $manual = $manual.Trim().Trim('"').Trim("'") }
         if ($manual -and (Test-Path $manual)) { $dshBin = $manual }
         if (-not $dshBin) { Write-Error '未找到 dsh CLI，安装中止。' ; exit 1 }
     }
@@ -209,16 +211,30 @@ $lnk.Description = 'DeepSeek Harness 系统托盘启动器'
 $lnk.WindowStyle = 1
 $lnk.Save()
 
-# 配置文件
-$cwdSetting = if ($Cwd -and (Test-Path $Cwd)) { $Cwd } else { $env:USERPROFILE }
+# 配置文件（重装时保留已有自定义 url 与未显式覆盖的 cwd）
+$cfgPath = Join-Path $InstallDir 'dsh-tray.config.json'
+$existingCfg = $null
+if (Test-Path $cfgPath) {
+    try { $existingCfg = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch {}
+}
+$urlSetting = 'http://127.0.0.1:3080'
+if ($existingCfg -and $existingCfg.PSObject.Properties.Name -contains 'url' -and "$($existingCfg.url)".Trim()) {
+    $urlSetting = "$($existingCfg.url)".Trim()
+}
+$cwdSetting = $env:USERPROFILE
+if ($Cwd -and (Test-Path $Cwd)) {
+    $cwdSetting = $Cwd
+} elseif ($existingCfg -and $existingCfg.PSObject.Properties.Name -contains 'cwd' -and "$($existingCfg.cwd)".Trim() -and (Test-Path "$($existingCfg.cwd)".Trim())) {
+    $cwdSetting = "$($existingCfg.cwd)".Trim()
+}
 $cfg = @{
     dshBin        = $dshBin
     node          = $nodePath
-    url           = 'http://127.0.0.1:3080'
+    url           = $urlSetting
     cwd           = $cwdSetting
     shortcut      = $lnkPath
 }
-$cfg | ConvertTo-Json | Set-Content -Path (Join-Path $InstallDir 'dsh-tray.config.json') -Encoding UTF8
+$cfg | ConvertTo-Json | Set-Content -Path $cfgPath -Encoding UTF8
 
 # 开机自启
 if ($Autostart) {

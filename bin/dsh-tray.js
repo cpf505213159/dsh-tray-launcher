@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // dsh-tray: 启动 DeepSeek Harness 托盘启动器（默认托盘模式，--console 为控制台模式）
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,8 +9,19 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const ps1 = join(root, "tray.ps1");
 const rest = process.argv.slice(2);
 const consoleMode = rest.includes("-ConsoleMode") || rest.includes("--console");
+const normalizedArgs = rest.map((arg) => (arg === "--console" ? "-ConsoleMode" : arg));
 
-const psArgs = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1, ...rest];
+// 若已通过 install.ps1 / dsh-tray-install 安装，默认复用安装目录的配置与日志，
+// 避免在全局 node_modules 目录写入 logs/ 与 brand.ico，也避免忽略已配置的 dshBin/cwd。
+const hasDataDir = normalizedArgs.some((arg) => arg.toLowerCase() === "-datadir");
+if (!hasDataDir && process.env.LOCALAPPDATA) {
+  const installDir = join(process.env.LOCALAPPDATA, "Programs", "DSHTray");
+  if (existsSync(join(installDir, "dsh-tray.config.json"))) {
+    normalizedArgs.push("-DataDir", installDir);
+  }
+}
+
+const psArgs = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1, ...normalizedArgs];
 
 if (consoleMode) {
   // 控制台模式：前台运行，日志直出当前终端
@@ -19,7 +31,7 @@ if (consoleMode) {
   // 托盘模式：无窗口后台运行，包装器负责给终端反馈。
   // windowsHide -> CREATE_NO_WINDOW，子进程不分配控制台（不会闪黑窗）。
   const child = spawn("powershell.exe", ["-WindowStyle", "Hidden", ...psArgs], {
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "ignore", "pipe"],
     windowsHide: true,
   });
   let errText = "";

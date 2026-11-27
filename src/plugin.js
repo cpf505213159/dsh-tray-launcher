@@ -42,6 +42,7 @@ function apply(ctx) {
       "Hidden",
       "-File",
       script,
+      "-AttachOnly",
       "-DataDir",
       dataDir,
     ],
@@ -49,10 +50,9 @@ function apply(ctx) {
   );
   child.unref();
   ctx.on("dispose", () => {
-    // 杀整棵进程树：child 是 powershell，它经 cmd /c 拉起 cmd→node(harness)，
-    // 只 kill powershell 会留下孤儿 harness；用 taskkill /T 连子进程一起收。
+    // 仅当子进程仍在运行时再杀进程树，避免进程已因单实例互斥锁退出后误杀被系统复用的 PID。
     try {
-      if (child.pid) {
+      if (child.pid && child.exitCode === null && child.signalCode === null) {
         spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
           windowsHide: true,
           stdio: "ignore",

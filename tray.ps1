@@ -9,6 +9,7 @@ param(
     [switch]$ConsoleMode,
     [switch]$NoOpen,
     [switch]$NoRespawn,
+    [switch]$AttachOnly,
     [string]$DataDir = ''
 )
 
@@ -22,7 +23,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 $script:cfg = $null
 $configPath = Join-Path $script:dataDir 'dsh-tray.config.json'
 if (Test-Path $configPath) {
-    try { $script:cfg = Get-Content $configPath -Raw | ConvertFrom-Json } catch {}
+    try { $script:cfg = Get-Content $configPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch {}
 }
 
 function Get-CfgValue($name, $default) {
@@ -74,8 +75,8 @@ function Find-DshBin {
     foreach ($rc in @((Join-Path $env:USERPROFILE '.npmrc'), (Join-Path $env:APPDATA 'npm\etc\npmrc'))) {
         if (Test-Path $rc) {
             $m = Select-String -Path $rc -Pattern '^\s*cache\s*=\s*(.+)\s*$' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($m) {
-                $v = (($m.Lines | Select-Object -First 1) -split '=', 2)[1].Trim()
+            if ($m -and $m.Line) {
+                $v = ($m.Line -split '=', 2)[1].Trim().Trim('"').Trim("'")
                 if ($v) { $cacheDirs += $v }
             }
         }
@@ -94,8 +95,8 @@ function Find-DshBin {
     foreach ($rc in @((Join-Path $env:USERPROFILE '.npmrc'), (Join-Path $env:APPDATA 'npm\etc\npmrc'))) {
         if (Test-Path $rc) {
             $m = Select-String -Path $rc -Pattern '^\s*prefix\s*=\s*(.+)\s*$' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($m) {
-                $v = (($m.Lines | Select-Object -First 1) -split '=', 2)[1].Trim()
+            if ($m -and $m.Line) {
+                $v = ($m.Line -split '=', 2)[1].Trim().Trim('"').Trim("'")
                 if ($v) { $globalRoots += $v }
             }
         }
@@ -133,7 +134,7 @@ if ($ConsoleMode) {
 # bin。只有真正要"拉起" harness 的分支才要求 bin（见下方启动分支）。
 
 # ---- 托盘模式 ----
-$script:TrayVersion = '1.5.0'
+$script:TrayVersion = '1.5.5'
 try {
     $pk = Join-Path $PSScriptRoot 'package.json'
     if (Test-Path $pk) {
@@ -186,6 +187,7 @@ if (-not $NoRespawn) {
             $respawnArgs = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $PSCommandPath + '" -NoRespawn'
             if ($script:dataDir -ne $PSScriptRoot) { $respawnArgs = $respawnArgs + ' -DataDir "' + $script:dataDir + '"' }
             if ($NoOpen) { $respawnArgs = $respawnArgs + ' -NoOpen' }
+            if ($AttachOnly) { $respawnArgs = $respawnArgs + ' -AttachOnly' }
             $psi.Arguments = $respawnArgs
             $psi.UseShellExecute = $false
             $psi.CreateNoWindow = $true
@@ -200,6 +202,7 @@ New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 $outLog  = Join-Path $logDir 'dsh-out.log'
 $errLog  = Join-Path $logDir 'dsh-err.log'
 $trayLog = Join-Path $logDir 'dsh-tray.log'
+$sessionFile = Join-Path $logDir 'session.json'
 
 function Write-TrayLog($msg) {
     $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg
@@ -226,17 +229,24 @@ function Rotate-Log($path, [long]$maxBytes = 10485760) {
 # 日志里取最后一次打印的带 token 地址；取不到（旧版 harness）再退回配置里的 url。
 $script:harnessUrl = $null
 $script:outLogStart = 0
-# 本次托盘进程的启动时刻：用来判断日志里的地址是不是本次运行写下的（旧 token 早已失效）
-$script:trayStartTime = Get-Date
-# 每次都从日志实时取（不缓存），用于"就绪判定 + 取带 token 地址"：
-# 避免端口先通、日志后写的竞态导致首开裸地址 401；重启后也能拿到新 token。
-function Get-LogHarnessUrl {
-    # 只从本次启动后新增的日志区间找 token，避免把上一次运行的旧 token 当本次地址
+# 记录由本托盘拉起的 harness 进程与日志偏移（不含 token），供二次启动校验日志时效性
+function Save-HarnessSession([int]$harnessPid, [long]$offset) {
+    try {
+        @{ pid = $harnessPid; outLogStart = $offset } | ConvertTo-Json -Compress | Set-Content -Path $sessionFile -Encoding UTF8
+    } catch {}
+}
+function Clear-HarnessSession {
+    try {
+        if (Test-Path $sessionFile) { Remove-Item $sessionFile -Force -ErrorAction SilentlyContinue }
+    } catch {}
+}
+function Get-LogHarnessUrlFromOffset([long]$offset) {
+    # 只从指定偏移之后的新增日志区间找 token，避免把上一次运行的旧 token 当本次地址
     try {
         if (Test-Path $outLog) {
             $fs = [System.IO.File]::Open($outLog, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
             try {
-                if ($script:outLogStart -gt 0 -and $script:outLogStart -le $fs.Length) { $fs.Position = $script:outLogStart }
+                if ($offset -gt 0 -and $offset -le $fs.Length) { $fs.Position = $offset }
                 $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)
                 $text = $sr.ReadToEnd()
                 $mm = [regex]::Matches($text, 'dsh web:\s+(https?://\S+)')
@@ -248,6 +258,28 @@ function Get-LogHarnessUrl {
         }
     } catch {}
     return $null
+}
+# 每次都从日志实时取（不缓存），用于"就绪判定 + 取带 token 地址"：
+# 避免端口先通、日志后写的竞态导致首开裸地址 401；重启后也能拿到新 token。
+function Get-LogHarnessUrl {
+    return Get-LogHarnessUrlFromOffset $script:outLogStart
+}
+function Get-ActiveSessionUrl {
+    try {
+        if (-not (Test-Path $sessionFile)) { return $null }
+        $sess = Get-Content $sessionFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not $sess -or -not $sess.pid) { return $null }
+        $alive = Get-Process -Id ([int]$sess.pid) -ErrorAction SilentlyContinue
+        if (-not $alive) { return $null }
+        $off = 0L
+        if ($null -ne $sess.outLogStart) { $off = [long]$sess.outLogStart }
+        return Get-LogHarnessUrlFromOffset $off
+    } catch {}
+    return $null
+}
+function Get-ConfiguredPort {
+    try { $p = ([uri]$url).Port; if ($p -gt 0) { return $p } } catch {}
+    return 3080
 }
 function Get-HarnessUrl {
     if ($script:harnessUrl) { return $script:harnessUrl }
@@ -267,11 +299,11 @@ $createdNew = $null
 $mutex = New-Object System.Threading.Mutex($true, 'Local\dsh-tray-launcher', [ref]$createdNew)
 if (-not $createdNew) {
     Write-TrayLog 'another tray instance is running; opening UI and exiting'
-    # 只打开日志里带 token 的地址；裸地址会 401，宁可不开
+    # 只打开当前存活会话日志里带 token 的地址；外部 harness 或过期旧日志宁可不开（避免 401）
     if (-not $NoOpen) {
-        $existingUrl = Get-LogHarnessUrl
+        $existingUrl = Get-ActiveSessionUrl
         if ($existingUrl) { Start-Process $existingUrl }
-        else { Write-TrayLog 'no token URL available; skip opening UI (bare URL would 401)' }
+        else { Write-TrayLog 'no active session token URL available; skip opening UI (bare or stale URL would 401)' }
     }
     exit 0
 }
@@ -554,6 +586,7 @@ function Stop-Harness {
             }
         } catch {}
         $script:spawned = $false
+        Clear-HarnessSession
     } else {
         Write-TrayLog 'external harness is not owned by tray; leaving it running'
     }
@@ -597,6 +630,8 @@ function Start-HarnessProcess {
     $script:proc.StartInfo = $psi
     [void]$script:proc.Start()
     $script:spawned = $true
+    $script:launchTick = $script:tick
+    Save-HarnessSession $script:proc.Id $script:outLogStart
     Write-TrayLog ('harness started hidden, pid ' + $script:proc.Id)
 }
 
@@ -604,48 +639,64 @@ function Start-HarnessProcess {
 $script:spawned = $false
 $script:proc = $null
 $script:externalNoToken = $false
+$script:opened = $false
+$script:tick = 0
+$script:launchTick = 0
 
-$already = Test-PortOpen (Get-HarnessPort)
-if ($already) {
-    $attachUrl = Get-LogHarnessUrl
-    # 日志里的 token 只在写它的那次运行里有效。只有日志在本次托盘启动后还被写过，
-    # 才能确定这条地址属于正在监听的那个 harness；否则一律当作外部 harness。
-    $freshLog = $false
-    try {
-        if ((Test-Path $outLog) -and ((Get-Item $outLog).LastWriteTime -ge $script:trayStartTime)) { $freshLog = $true }
-    } catch {}
-    if ($attachUrl -and $freshLog) {
-        $script:harnessUrl = $attachUrl
-        Write-TrayLog ('harness already listening on port ' + (Get-HarnessPort) + '; tray attached')
-        Show-Toast '已在运行'
-    } else {
-        # 外部已有 harness 在监听，但拿不到它进程内存里的 ?token=，裸地址会 401。
-        # 标记 externalNoToken：不自动开浏览器，提示用户用原窗口打印的带 token 地址。
-        $script:externalNoToken = $true
-        Write-TrayLog ('port ' + (Get-HarnessPort) + ' already in use but no fresh token URL (external harness?); attached without owning it')
-        Show-Toast '检测到 Harness 已在运行，但无法自动获取访问令牌。请在其原窗口打开 dsh 打印的带 ?token= 的地址。' 6000
-    }
+if ($AttachOnly) {
+    # 插件随 dsh web 启动：绝不二次拉起 harness，仅挂载托盘
+    Clear-HarnessSession
+    $script:externalNoToken = $true
+    Write-TrayLog 'started in AttachOnly mode (hosted by dsh plugin); attached without owning harness'
 } else {
-    if (-not $bin) {
-        Add-Type -AssemblyName System.Windows.Forms
-        [System.Windows.Forms.MessageBox]::Show(
-            '未找到 DeepSeek Harness CLI (lib/bin.js)。' + "`n" +
-            '请运行 install.ps1 -DshPath <bin.js 路径> 重新安装，或确认已安装 dsh。',
-            'DeepSeek Harness') | Out-Null
-        exit 1
-    }
-    try {
-        Start-HarnessProcess
-        Show-Toast '正在启动…'
-    } catch {
-        Write-TrayLog ('start failed: ' + $_.Exception.Message)
-        Show-Toast '启动失败，详见日志'
+    $configuredPort = Get-ConfiguredPort
+    $already = Test-PortOpen $configuredPort
+    if ($already) {
+        $attachUrl = Get-ActiveSessionUrl
+        if ($attachUrl) {
+            $script:harnessUrl = $attachUrl
+            Write-TrayLog ('harness already listening on port ' + $configuredPort + '; tray attached to active session')
+            Show-Toast '已在运行'
+        } else {
+            # 外部已有 harness 在监听，但拿不到它进程内存里的 ?token=，裸地址会 401。
+            # 标记 externalNoToken：不自动开浏览器，提示用户用原窗口打印的带 token 地址。
+            Clear-HarnessSession
+            $script:externalNoToken = $true
+            Write-TrayLog ('port ' + $configuredPort + ' already in use but no active session token URL (external harness?); attached without owning it')
+            Show-Toast '检测到 Harness 已在运行，但无法自动获取访问令牌。请在其原窗口打开 dsh 打印的带 ?token= 的地址。' 6000
+        }
+    } else {
+        if (-not $node -or -not (Test-Path $node)) {
+            [System.Windows.Forms.MessageBox]::Show(
+                '未找到 node.exe。' + "`n" +
+                '请先安装 Node.js 或重新运行 install.ps1。',
+                'DeepSeek Harness') | Out-Null
+            $tray.Visible = $false
+            $tray.Dispose()
+            try { $mutex.ReleaseMutex() } catch {}
+            exit 1
+        }
+        if (-not $bin) {
+            [System.Windows.Forms.MessageBox]::Show(
+                '未找到 DeepSeek Harness CLI (lib/bin.js)。' + "`n" +
+                '请运行 install.ps1 -DshPath <bin.js 路径> 重新安装，或确认已安装 dsh。',
+                'DeepSeek Harness') | Out-Null
+            $tray.Visible = $false
+            $tray.Dispose()
+            try { $mutex.ReleaseMutex() } catch {}
+            exit 1
+        }
+        try {
+            Start-HarnessProcess
+            Show-Toast '正在启动…'
+        } catch {
+            Write-TrayLog ('start failed: ' + $_.Exception.Message)
+            Show-Toast '启动失败，详见日志'
+        }
     }
 }
 
 # ---- 轮询：端口就绪后打开浏览器；监视退出 ----
-$script:opened = $false
-$script:tick = 0
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 3000
 $timer.add_Tick({
@@ -657,7 +708,7 @@ $timer.add_Tick({
     if ($script:tick % 20 -eq 0) { Invoke-MemoryTrim }
 
     # 就绪判定：优先用日志里带 token 的地址(及其端口)判端口，再打开该地址。
-    # 新版 dsh 启动 MCP 后打印 token 可能需要 15s 以上，兜底必须晚于它，否则会开成裸地址（401）。
+    # 新版 dsh 启动 MCP 后打印 token 可能需要 15s 以上，兜底必须晚于本次启动至少 90s，否则重启/首启会开成裸地址（401）。
     if (-not $NoOpen -and -not $script:opened -and -not $script:externalNoToken) {
         $logUrl = Get-LogHarnessUrl
         $target = $null
@@ -665,7 +716,7 @@ $timer.add_Tick({
             $p = 3080
             try { $p = ([uri]$logUrl).Port } catch {}
             if (Test-PortOpen $p) { $target = $logUrl }
-        } elseif ($script:tick -ge 30 -and (Test-PortOpen (Get-HarnessPort))) {
+        } elseif (($script:tick - $script:launchTick) -ge 30 -and (Test-PortOpen (Get-HarnessPort))) {
             $target = Get-HarnessUrl
         }
         if ($target) {
@@ -682,10 +733,20 @@ $timer.add_Tick({
 
     if ($script:spawned -and $script:proc -and $script:proc.HasExited) {
         Write-TrayLog 'harness exited'
-        Show-Toast '已停止'
-        Start-Sleep -Seconds 2
-        $tray.Visible = $false
-        [System.Windows.Forms.Application]::Exit()
+        $timer.Stop()
+        $script:spawned = $false
+        Clear-HarnessSession
+        Show-Toast '已停止' 2000
+        # 用非阻塞定时器延迟退出，避免 Start-Sleep 堵死 WinForms UI 线程导致轻提示来不及绘制
+        $script:exitTimer = New-Object System.Windows.Forms.Timer
+        $script:exitTimer.Interval = 2100
+        $script:exitTimer.add_Tick({
+            $script:exitTimer.Stop()
+            $script:exitTimer.Dispose()
+            $tray.Visible = $false
+            [System.Windows.Forms.Application]::Exit()
+        })
+        $script:exitTimer.Start()
     }
 })
 $timer.Start()
